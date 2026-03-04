@@ -1,6 +1,7 @@
 import os
 import logging
 import pandas as pd
+import matplotlib.pyplot as plt
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
@@ -50,11 +51,33 @@ async def resumo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     await update.message.reply_text(msg)
 
+async def grafico(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    df = pd.read_csv(ARQUIVO)
+    despesas = df[df["Valor"] < 0]
+
+    if despesas.empty:
+        await update.message.reply_text("Sem dados para gerar gráfico.")
+        return
+
+    resumo = despesas.groupby("Descricao")["Valor"].sum().abs()
+
+    plt.figure()
+    resumo.plot(kind="bar")
+    plt.title("Gastos por Descrição")
+    plt.ylabel("Valor (R$)")
+    plt.tight_layout()
+    plt.savefig("grafico.png")
+    plt.close()
+
+    with open("grafico.png", "rb") as img:
+        await update.message.reply_photo(photo=img)
+
 app = ApplicationBuilder().token(TOKEN).build()
 
 app.add_handler(CommandHandler("start", start))
 app.add_handler(CommandHandler("gasto", gasto))
 app.add_handler(CommandHandler("receita", receita))
 app.add_handler(CommandHandler("resumo", resumo))
+app.add_handler(CommandHandler("grafico", grafico))
 
 app.run_polling()
