@@ -1,16 +1,4 @@
 import os
-import psycopg2
-
-DATABASE_URL = os.getenv("DATABASE_URL")
-
-if not DATABASE_URL:
-    raise Exception("DATABASE_URL não encontrada!")
-
-conn = psycopg2.connect(DATABASE_URL)
-cursor = conn.cursor()
-
-print("✅ Conectado ao PostgreSQL com sucesso!")
-import os
 import logging
 import pandas as pd
 from datetime import datetime
