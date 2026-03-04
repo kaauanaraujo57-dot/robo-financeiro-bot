@@ -6,6 +6,7 @@ from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
 TOKEN = os.getenv("TOKEN")
+
 ARQUIVO = "financas.csv"
 ARQ_METAS = "metas.csv"
 
@@ -15,18 +16,21 @@ logging.basicConfig(level=logging.INFO)
 # CRIAÇÃO DE ARQUIVOS
 # =========================
 
-if not os.path.exists(ARQUIVO):
-    df = pd.DataFrame(columns=[
-        "UserID","Data","Mes","Ano",
-        "Descricao","Categoria","Valor"
-    ])
-    df.to_csv(ARQUIVO, index=False)
+def criar_arquivo_se_nao_existir():
+    if not os.path.exists(ARQUIVO):
+        df = pd.DataFrame(columns=[
+            "UserID","Data","Mes","Ano",
+            "Descricao","Categoria","Valor"
+        ])
+        df.to_csv(ARQUIVO, index=False)
 
-if not os.path.exists(ARQ_METAS):
-    df_meta = pd.DataFrame(columns=[
-        "UserID","Categoria","Meta"
-    ])
-    df_meta.to_csv(ARQ_METAS, index=False)
+    if not os.path.exists(ARQ_METAS):
+        df_meta = pd.DataFrame(columns=[
+            "UserID","Categoria","Meta"
+        ])
+        df_meta.to_csv(ARQ_METAS, index=False)
+
+criar_arquivo_se_nao_existir()
 
 # =========================
 # FUNÇÕES AUXILIARES
@@ -37,37 +41,75 @@ def mes_atual():
     return hoje.month, hoje.year
 
 def extrair_data(args):
+    """
+    Último argumento pode ser mes-ano
+    Exemplo:
+    /gasto 100 comida lanche 02-2026
+    """
+    mes, ano = mes_atual()
+
     if len(args) >= 3:
-        ultimo = args[-1]
+        possivel_data = args[-1]
+
         try:
-            mes, ano = ultimo.split("-")
-            mes = int(mes)
-            ano = int(ano)
-            if 1 <= mes <= 12:
-                return mes, ano, args[:-1]
+            m, a = possivel_data.split("-")
+            m = int(m)
+            a = int(a)
+
+            if 1 <= m <= 12:
+                mes, ano = m, a
+                args = args[:-1]
+
         except:
             pass
-    return *mes_atual(), args
+
+    return mes, ano, args
 
 # =========================
-# REGISTRO
+# COMANDOS
 # =========================
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = """
+🤖 Bem-vindo ao robô financeiro!
+
+Comandos disponíveis:
+/gasto valor categoria descricao [mes-ano]
+/receita valor categoria descricao [mes-ano]
+/setmeta categoria valor
+/resumo [mes-ano]
+/comparar mes-ano mes-ano
+"""
+    await update.message.reply_text(msg)
+
+# -------------------------
 
 async def gasto(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
 
     try:
+        if len(context.args) < 2:
+            raise Exception()
+
         valor = float(context.args[0])
+
         mes, ano, args_limpos = extrair_data(context.args)
+
+        if len(args_limpos) < 2:
+            raise Exception()
+
         categoria = args_limpos[1].lower()
-        descricao = " ".join(args_limpos[2:])
+        descricao = " ".join(args_limpos[2:]) if len(args_limpos) > 2 else ""
+
     except:
-        await update.message.reply_text("Formato errado.")
+        await update.message.reply_text(
+            "Formato: /gasto valor categoria descricao [mes-ano]"
+        )
         return
 
     df = pd.read_csv(ARQUIVO)
 
-    novo = pd.DataFrame([[
+    novo = pd.DataFrame([[ 
         user_id,
         f"01/{mes:02d}/{ano}",
         mes,
@@ -84,16 +126,29 @@ async def gasto(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text("💸 Gasto registrado.")
 
+# -------------------------
+
 async def receita(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
 
     try:
+        if len(context.args) < 2:
+            raise Exception()
+
         valor = float(context.args[0])
+
         mes, ano, args_limpos = extrair_data(context.args)
+
+        if len(args_limpos) < 2:
+            raise Exception()
+
         categoria = args_limpos[1].lower()
-        descricao = " ".join(args_limpos[2:])
+        descricao = " ".join(args_limpos[2:]) if len(args_limpos) > 2 else ""
+
     except:
-        await update.message.reply_text("Formato errado.")
+        await update.message.reply_text(
+            "Formato: /receita valor categoria descricao [mes-ano]"
+        )
         return
 
     df = pd.read_csv(ARQUIVO)
@@ -114,16 +169,23 @@ async def receita(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("💰 Receita registrada.")
 
 # =========================
-# METAS
+# META
 # =========================
 
 async def setmeta(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
+
     try:
+        if len(context.args) != 2:
+            raise Exception()
+
         categoria = context.args[0].lower()
         valor = float(context.args[1])
+
     except:
-        await update.message.reply_text("Use: /setmeta categoria valor")
+        await update.message.reply_text(
+            "Formato: /setmeta categoria valor"
+        )
         return
 
     df_meta = pd.read_csv(ARQ_METAS)
@@ -141,6 +203,10 @@ async def setmeta(update: Update, context: ContextTypes.DEFAULT_TYPE):
     df_meta.to_csv(ARQ_METAS, index=False)
 
     await update.message.reply_text("🎯 Meta definida.")
+
+# =========================
+# VERIFICAR META
+# =========================
 
 async def verificar_meta(update, user_id, categoria, mes, ano):
     df = pd.read_csv(ARQUIVO)
@@ -166,12 +232,17 @@ async def verificar_meta(update, user_id, categoria, mes, ano):
     limite = meta.iloc[0]["Meta"]
 
     if gasto_total >= limite:
-        await update.message.reply_text(f"🚨 Você ultrapassou a meta de {categoria}")
+        await update.message.reply_text(
+            f"🚨 Você ultrapassou a meta de {categoria}"
+        )
+
     elif gasto_total >= limite * 0.8:
-        await update.message.reply_text(f"⚠️ Você já usou 80% da meta de {categoria}")
+        await update.message.reply_text(
+            f"⚠️ Você já usou 80% da meta de {categoria}"
+        )
 
 # =========================
-# RESUMO COM RANKING
+# RESUMO
 # =========================
 
 async def resumo(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -181,7 +252,11 @@ async def resumo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     df = df[df["UserID"] == user_id]
 
     if len(context.args) == 1:
-        mes, ano = map(int, context.args[0].split("-"))
+        try:
+            mes, ano = map(int, context.args[0].split("-"))
+        except:
+            await update.message.reply_text("Formato: mes-ano")
+            return
     else:
         mes, ano = mes_atual()
 
@@ -215,20 +290,27 @@ async def resumo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(msg)
 
 # =========================
-# COMPARAÇÃO ENTRE MESES
+# COMPARAR
 # =========================
 
 async def comparar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
+
     if len(context.args) != 2:
-        await update.message.reply_text("Use: /comparar 02-2026 03-2026")
+        await update.message.reply_text(
+            "Use: /comparar 02-2026 03-2026"
+        )
         return
 
     df = pd.read_csv(ARQUIVO)
     df = df[df["UserID"] == user_id]
 
-    mes1, ano1 = map(int, context.args[0].split("-"))
-    mes2, ano2 = map(int, context.args[1].split("-"))
+    try:
+        mes1, ano1 = map(int, context.args[0].split("-"))
+        mes2, ano2 = map(int, context.args[1].split("-"))
+    except:
+        await update.message.reply_text("Formato inválido.")
+        return
 
     total1 = abs(df[(df["Mes"]==mes1)&(df["Ano"]==ano1)&(df["Valor"]<0)]["Valor"].sum())
     total2 = abs(df[(df["Mes"]==mes2)&(df["Ano"]==ano2)&(df["Valor"]<0)]["Valor"].sum())
@@ -247,11 +329,12 @@ async def comparar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 # =========================
-# BOT
+# BOT INIT
 # =========================
 
 app = ApplicationBuilder().token(TOKEN).build()
 
+app.add_handler(CommandHandler("start", start))
 app.add_handler(CommandHandler("gasto", gasto))
 app.add_handler(CommandHandler("receita", receita))
 app.add_handler(CommandHandler("resumo", resumo))
