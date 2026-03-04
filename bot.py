@@ -1,39 +1,36 @@
 import os
 import logging
 import pandas as pd
-import matplotlib.pyplot as plt
 from datetime import datetime
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
 TOKEN = os.getenv("TOKEN")
 ARQUIVO = "financas.csv"
-ARQ_CATEGORIAS = "categorias.txt"
+ARQ_METAS = "metas.csv"
 
 logging.basicConfig(level=logging.INFO)
 
-# Criar base se não existir
+# =========================
+# CRIAÇÃO DE ARQUIVOS
+# =========================
+
 if not os.path.exists(ARQUIVO):
-    df = pd.DataFrame(columns=["UserID","Data","Mes","Ano","Descricao","Categoria","Valor"])
+    df = pd.DataFrame(columns=[
+        "UserID","Data","Mes","Ano",
+        "Descricao","Categoria","Valor"
+    ])
     df.to_csv(ARQUIVO, index=False)
 
-# Criar categorias padrão
-if not os.path.exists(ARQ_CATEGORIAS):
-    categorias_iniciais = [
-        "mercado","casa","roupas","celular",
-        "pessoal","lazer","investimentos","transporte"
-    ]
-    with open(ARQ_CATEGORIAS, "w") as f:
-        for c in categorias_iniciais:
-            f.write(c + "\n")
+if not os.path.exists(ARQ_METAS):
+    df_meta = pd.DataFrame(columns=[
+        "UserID","Categoria","Meta"
+    ])
+    df_meta.to_csv(ARQ_METAS, index=False)
 
-def carregar_categorias():
-    with open(ARQ_CATEGORIAS, "r") as f:
-        return [linha.strip() for linha in f.readlines()]
-
-def salvar_categoria(nova):
-    with open(ARQ_CATEGORIAS, "a") as f:
-        f.write(nova + "\n")
+# =========================
+# FUNÇÕES AUXILIARES
+# =========================
 
 def mes_atual():
     hoje = datetime.now()
@@ -50,8 +47,11 @@ def extrair_data(args):
                 return mes, ano, args[:-1]
         except:
             pass
-    mes, ano = mes_atual()
-    return mes, ano, args
+    return *mes_atual(), args
+
+# =========================
+# REGISTRO
+# =========================
 
 async def gasto(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -59,14 +59,10 @@ async def gasto(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         valor = float(context.args[0])
         mes, ano, args_limpos = extrair_data(context.args)
-        categoria = args_limpos[1].lower().strip()
+        categoria = args_limpos[1].lower()
         descricao = " ".join(args_limpos[2:])
     except:
         await update.message.reply_text("Formato errado.")
-        return
-
-    if categoria not in carregar_categorias():
-        await update.message.reply_text("Categoria inválida.")
         return
 
     df = pd.read_csv(ARQUIVO)
@@ -79,10 +75,12 @@ async def gasto(update: Update, context: ContextTypes.DEFAULT_TYPE):
         descricao,
         categoria,
         -abs(valor)
-    ]], columns=["UserID","Data","Mes","Ano","Descricao","Categoria","Valor"])
+    ]], columns=df.columns)
 
     df = pd.concat([df, novo], ignore_index=True)
     df.to_csv(ARQUIVO, index=False)
+
+    await verificar_meta(update, user_id, categoria, mes, ano)
 
     await update.message.reply_text("💸 Gasto registrado.")
 
@@ -92,14 +90,10 @@ async def receita(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         valor = float(context.args[0])
         mes, ano, args_limpos = extrair_data(context.args)
-        categoria = args_limpos[1].lower().strip()
+        categoria = args_limpos[1].lower()
         descricao = " ".join(args_limpos[2:])
     except:
         await update.message.reply_text("Formato errado.")
-        return
-
-    if categoria not in carregar_categorias():
-        await update.message.reply_text("Categoria inválida.")
         return
 
     df = pd.read_csv(ARQUIVO)
@@ -112,12 +106,73 @@ async def receita(update: Update, context: ContextTypes.DEFAULT_TYPE):
         descricao,
         categoria,
         abs(valor)
-    ]], columns=["UserID","Data","Mes","Ano","Descricao","Categoria","Valor"])
+    ]], columns=df.columns)
 
     df = pd.concat([df, novo], ignore_index=True)
     df.to_csv(ARQUIVO, index=False)
 
     await update.message.reply_text("💰 Receita registrada.")
+
+# =========================
+# METAS
+# =========================
+
+async def setmeta(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    try:
+        categoria = context.args[0].lower()
+        valor = float(context.args[1])
+    except:
+        await update.message.reply_text("Use: /setmeta categoria valor")
+        return
+
+    df_meta = pd.read_csv(ARQ_METAS)
+
+    df_meta = df_meta[~(
+        (df_meta["UserID"] == user_id) &
+        (df_meta["Categoria"] == categoria)
+    )]
+
+    nova = pd.DataFrame([[
+        user_id, categoria, valor
+    ]], columns=df_meta.columns)
+
+    df_meta = pd.concat([df_meta, nova], ignore_index=True)
+    df_meta.to_csv(ARQ_METAS, index=False)
+
+    await update.message.reply_text("🎯 Meta definida.")
+
+async def verificar_meta(update, user_id, categoria, mes, ano):
+    df = pd.read_csv(ARQUIVO)
+    df_meta = pd.read_csv(ARQ_METAS)
+
+    df_user = df[
+        (df["UserID"] == user_id) &
+        (df["Mes"] == mes) &
+        (df["Ano"] == ano) &
+        (df["Categoria"] == categoria)
+    ]
+
+    gasto_total = abs(df_user[df_user["Valor"] < 0]["Valor"].sum())
+
+    meta = df_meta[
+        (df_meta["UserID"] == user_id) &
+        (df_meta["Categoria"] == categoria)
+    ]
+
+    if meta.empty:
+        return
+
+    limite = meta.iloc[0]["Meta"]
+
+    if gasto_total >= limite:
+        await update.message.reply_text(f"🚨 Você ultrapassou a meta de {categoria}")
+    elif gasto_total >= limite * 0.8:
+        await update.message.reply_text(f"⚠️ Você já usou 80% da meta de {categoria}")
+
+# =========================
+# RESUMO COM RANKING
+# =========================
 
 async def resumo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -126,9 +181,7 @@ async def resumo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     df = df[df["UserID"] == user_id]
 
     if len(context.args) == 1:
-        mes, ano = context.args[0].split("-")
-        mes = int(mes)
-        ano = int(ano)
+        mes, ano = map(int, context.args[0].split("-"))
     else:
         mes, ano = mes_atual()
 
@@ -139,20 +192,70 @@ async def resumo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     receitas = df[df["Valor"] > 0]["Valor"].sum()
-    despesas = df[df["Valor"] < 0]["Valor"].sum()
-    saldo = receitas + despesas
+    despesas = abs(df[df["Valor"] < 0]["Valor"].sum())
+    saldo = receitas - despesas
+
+    ranking = (
+        df[df["Valor"] < 0]
+        .groupby("Categoria")["Valor"]
+        .sum()
+        .abs()
+        .sort_values(ascending=False)
+    )
+
+    msg = f"📊 Resumo {mes:02d}-{ano}\n\n"
+    msg += f"Receitas: R$ {receitas:.2f}\n"
+    msg += f"Despesas: R$ {despesas:.2f}\n"
+    msg += f"Saldo: R$ {saldo:.2f}\n\n"
+    msg += "🏆 Ranking de Gastos:\n"
+
+    for i, (cat, val) in enumerate(ranking.items(), start=1):
+        msg += f"{i}º {cat} - R$ {val:.2f}\n"
+
+    await update.message.reply_text(msg)
+
+# =========================
+# COMPARAÇÃO ENTRE MESES
+# =========================
+
+async def comparar(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if len(context.args) != 2:
+        await update.message.reply_text("Use: /comparar 02-2026 03-2026")
+        return
+
+    df = pd.read_csv(ARQUIVO)
+    df = df[df["UserID"] == user_id]
+
+    mes1, ano1 = map(int, context.args[0].split("-"))
+    mes2, ano2 = map(int, context.args[1].split("-"))
+
+    total1 = abs(df[(df["Mes"]==mes1)&(df["Ano"]==ano1)&(df["Valor"]<0)]["Valor"].sum())
+    total2 = abs(df[(df["Mes"]==mes2)&(df["Ano"]==ano2)&(df["Valor"]<0)]["Valor"].sum())
+
+    if total1 == 0:
+        await update.message.reply_text("Primeiro mês sem dados.")
+        return
+
+    variacao = ((total2 - total1) / total1) * 100
 
     await update.message.reply_text(
-        f"📊 Resumo {mes:02d}-{ano}\n\n"
-        f"Receitas: R$ {receitas:.2f}\n"
-        f"Despesas: R$ {abs(despesas):.2f}\n"
-        f"Saldo: R$ {saldo:.2f}"
+        f"📊 Comparação:\n"
+        f"{mes1:02d}-{ano1}: R$ {total1:.2f}\n"
+        f"{mes2:02d}-{ano2}: R$ {total2:.2f}\n"
+        f"Variação: {variacao:.2f}%"
     )
+
+# =========================
+# BOT
+# =========================
 
 app = ApplicationBuilder().token(TOKEN).build()
 
 app.add_handler(CommandHandler("gasto", gasto))
 app.add_handler(CommandHandler("receita", receita))
 app.add_handler(CommandHandler("resumo", resumo))
+app.add_handler(CommandHandler("setmeta", setmeta))
+app.add_handler(CommandHandler("comparar", comparar))
 
 app.run_polling()
