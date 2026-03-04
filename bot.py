@@ -64,17 +64,18 @@ async def resumo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     despesas = df[df["Valor"] < 0]["Valor"].sum()
     saldo = receitas + despesas
 
-    resumo_categoria = df.groupby("Categoria")["Valor"].sum()
+    # Só categorias de gastos
+    gastos_categoria = df[df["Valor"] < 0].groupby("Categoria")["Valor"].sum().abs()
 
     msg = (
         f"📊 Resumo Geral\n\n"
         f"💰 Receitas: R$ {receitas:.2f}\n"
         f"💸 Despesas: R$ {abs(despesas):.2f}\n"
         f"💵 Saldo: R$ {saldo:.2f}\n\n"
-        f"📂 Por Categoria:\n"
+        f"📂 Gastos por Categoria:\n"
     )
 
-    for cat, valor in resumo_categoria.items():
+    for cat, valor in gastos_categoria.items():
         msg += f"{cat}: R$ {valor:.2f}\n"
 
     await update.message.reply_text(msg)
@@ -90,9 +91,8 @@ async def grafico(update: Update, context: ContextTypes.DEFAULT_TYPE):
     resumo = despesas.groupby("Categoria")["Valor"].sum().abs()
 
     plt.figure()
-    resumo.plot(kind="bar")
-    plt.title("Gastos por Categoria")
-    plt.ylabel("Valor (R$)")
+    plt.pie(resumo, labels=resumo.index, autopct='%1.1f%%')
+    plt.title("Distribuição de Gastos por Categoria")
     plt.tight_layout()
     plt.savefig("grafico.png")
     plt.close()
