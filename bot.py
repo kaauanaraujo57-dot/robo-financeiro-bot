@@ -22,12 +22,30 @@ def mes_atual():
     hoje = datetime.now()
     return hoje.month, hoje.year
 
+def extrair_data(args):
+    """
+    Verifica se o último argumento está no formato MM-AAAA.
+    Se estiver, retorna mes, ano e remove da lista.
+    """
+    if len(args) >= 3:
+        ultimo = args[-1]
+        try:
+            mes, ano = ultimo.split("-")
+            mes = int(mes)
+            ano = int(ano)
+            if 1 <= mes <= 12:
+                return mes, ano, args[:-1]
+        except:
+            pass
+    mes, ano = mes_atual()
+    return mes, ano, args
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "💰 Robô Financeiro 2.0\n\n"
+        "💰 Robô Financeiro 3.0\n\n"
         "Comandos:\n"
-        "/gasto valor categoria descricao\n"
-        "/receita valor categoria descricao\n"
+        "/gasto valor categoria descricao (opcional MM-AAAA)\n"
+        "/receita valor categoria descricao (opcional MM-AAAA)\n"
         "/resumo (ou /resumo 03-2026)\n"
         "/historico categoria\n"
         "/grafico"
@@ -36,54 +54,54 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def gasto(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         valor = float(context.args[0])
-        categoria = context.args[1]
-        descricao = " ".join(context.args[2:])
+        mes, ano, args_limpos = extrair_data(context.args)
+        categoria = args_limpos[1]
+        descricao = " ".join(args_limpos[2:])
     except:
-        await update.message.reply_text("Formato errado.\nUse: /gasto valor categoria descricao")
+        await update.message.reply_text("Formato errado.")
         return
 
-    hoje = datetime.now()
     df = pd.read_csv(ARQUIVO)
 
     novo = pd.DataFrame([[
-        hoje.strftime("%d/%m/%Y"),
-        hoje.month,
-        hoje.year,
+        f"01/{mes:02d}/{ano}",
+        mes,
+        ano,
         descricao,
-        categoria,
+        categoria.strip(),
         -abs(valor)
     ]], columns=["Data", "Mes", "Ano", "Descricao", "Categoria", "Valor"])
 
     df = pd.concat([df, novo], ignore_index=True)
     df.to_csv(ARQUIVO, index=False)
 
-    await update.message.reply_text(f"💸 Gasto registrado: R$ {valor}")
+    await update.message.reply_text(f"💸 Gasto registrado em {mes:02d}-{ano}")
 
 async def receita(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         valor = float(context.args[0])
-        categoria = context.args[1]
-        descricao = " ".join(context.args[2:])
+        mes, ano, args_limpos = extrair_data(context.args)
+        categoria = args_limpos[1]
+        descricao = " ".join(args_limpos[2:])
     except:
-        await update.message.reply_text("Formato errado.\nUse: /receita valor categoria descricao")
+        await update.message.reply_text("Formato errado.")
         return
 
-    hoje = datetime.now()
     df = pd.read_csv(ARQUIVO)
 
     novo = pd.DataFrame([[
-        hoje.strftime("%d/%m/%Y"),
-        hoje.month,
-        hoje.year,
+        f"01/{mes:02d}/{ano}",
+        mes,
+        ano,
         descricao,
-        categoria,
+        categoria.strip(),
         abs(valor)
     ]], columns=["Data", "Mes", "Ano", "Descricao", "Categoria", "Valor"])
 
     df = pd.concat([df, novo], ignore_index=True)
     df.to_csv(ARQUIVO, index=False)
 
-    await update.message.reply_text(f"💰 Receita registrada: R$ {valor}")
+    await update.message.reply_text(f"💰 Receita registrada em {mes:02d}-{ano}")
 
 async def resumo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     df = pd.read_csv(ARQUIVO)
@@ -101,22 +119,20 @@ async def resumo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     df = df[(df["Mes"] == mes) & (df["Ano"] == ano)]
 
+    if df.empty:
+        await update.message.reply_text("Sem registros neste período.")
+        return
+
     receitas = df[df["Valor"] > 0]["Valor"].sum()
     despesas = df[df["Valor"] < 0]["Valor"].sum()
     saldo = receitas + despesas
-
-    gastos_categoria = df[df["Valor"] < 0].groupby("Categoria")["Valor"].sum().abs()
 
     msg = (
         f"📊 Resumo {mes:02d}-{ano}\n\n"
         f"💰 Receitas: R$ {receitas:.2f}\n"
         f"💸 Despesas: R$ {abs(despesas):.2f}\n"
-        f"💵 Saldo: R$ {saldo:.2f}\n\n"
-        f"📂 Gastos por Categoria:\n"
+        f"💵 Saldo: R$ {saldo:.2f}"
     )
-
-    for cat, valor in gastos_categoria.items():
-        msg += f"{cat}: R$ {valor:.2f}\n"
 
     await update.message.reply_text(msg)
 
@@ -125,16 +141,18 @@ async def historico(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Use: /historico categoria")
         return
 
-    categoria = context.args[0]
+    categoria_busca = context.args[0].lower()
     df = pd.read_csv(ARQUIVO)
-    df = df[df["Categoria"] == categoria].sort_values(by=["Ano", "Mes"], ascending=False)
+    df["Categoria"] = df["Categoria"].str.lower()
 
-    if df.empty:
+    df_filtrado = df[df["Categoria"] == categoria_busca]
+
+    if df_filtrado.empty:
         await update.message.reply_text("Sem registros nessa categoria.")
         return
 
-    msg = f"📜 Histórico - {categoria}\n\n"
-    for _, row in df.tail(10).iterrows():
+    msg = f"📜 Histórico - {categoria_busca}\n\n"
+    for _, row in df_filtrado.tail(10).iterrows():
         msg += f"{row['Data']} - R$ {row['Valor']:.2f}\n"
 
     await update.message.reply_text(msg)
