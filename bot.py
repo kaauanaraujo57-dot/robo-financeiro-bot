@@ -5,32 +5,48 @@ from datetime import datetime
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
+# =========================
+# CONFIGURAÇÃO
+# =========================
+
 TOKEN = os.getenv("TOKEN")
+DATABASE_URL = os.getenv("DATABASE_URL")  # pega variável de ambiente do banco
 
 ARQUIVO = "financas.csv"
 ARQ_METAS = "metas.csv"
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s"
+)
 
 # =========================
-# CRIAÇÃO DE ARQUIVOS
+# VERIFICAÇÃO DO BANCO
 # =========================
 
-def criar_arquivo_se_nao_existir():
-    if not os.path.exists(ARQUIVO):
-        df = pd.DataFrame(columns=[
-            "UserID","Data","Mes","Ano",
-            "Descricao","Categoria","Valor"
-        ])
-        df.to_csv(ARQUIVO, index=False)
+if DATABASE_URL:
+    print(f"Conectando ao banco: {DATABASE_URL}")
+    # Aqui você colocaria a conexão com o PostgreSQL, ex: psycopg2 ou sqlalchemy
+    # Por enquanto, vamos deixar o bot funcionando com CSV
+else:
+    print("DATABASE_URL não configurada, usando CSV local.")
 
-    if not os.path.exists(ARQ_METAS):
-        df_meta = pd.DataFrame(columns=[
-            "UserID","Categoria","Meta"
-        ])
-        df_meta.to_csv(ARQ_METAS, index=False)
+# =========================
+# CRIAÇÃO DE ARQUIVOS CSV (se não existir)
+# =========================
 
-criar_arquivo_se_nao_existir()
+if not os.path.exists(ARQUIVO):
+    df = pd.DataFrame(columns=[
+        "UserID","Data","Mes","Ano",
+        "Descricao","Categoria","Valor"
+    ])
+    df.to_csv(ARQUIVO, index=False)
+
+if not os.path.exists(ARQ_METAS):
+    df_meta = pd.DataFrame(columns=[
+        "UserID","Categoria","Meta"
+    ])
+    df_meta.to_csv(ARQ_METAS, index=False)
 
 # =========================
 # FUNÇÕES AUXILIARES
@@ -41,205 +57,101 @@ def mes_atual():
     return hoje.month, hoje.year
 
 def extrair_data(args):
-    """
-    Último argumento pode ser mes-ano
-    Exemplo:
-    /gasto 100 comida lanche 02-2026
-    """
-    mes, ano = mes_atual()
-
     if len(args) >= 3:
-        possivel_data = args[-1]
-
+        ultimo = args[-1]
         try:
-            m, a = possivel_data.split("-")
-            m = int(m)
-            a = int(a)
-
-            if 1 <= m <= 12:
-                mes, ano = m, a
-                args = args[:-1]
-
+            mes, ano = ultimo.split("-")
+            mes = int(mes)
+            ano = int(ano)
+            if 1 <= mes <= 12:
+                return mes, ano, args[:-1]
         except:
             pass
-
-    return mes, ano, args
+    return *mes_atual(), args
 
 # =========================
-# COMANDOS
+# COMANDOS DO BOT
 # =========================
-
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    msg = """
-🤖 Bem-vindo ao robô financeiro!
-
-Comandos disponíveis:
-/gasto valor categoria descricao [mes-ano]
-/receita valor categoria descricao [mes-ano]
-/setmeta categoria valor
-/resumo [mes-ano]
-/comparar mes-ano mes-ano
-"""
-    await update.message.reply_text(msg)
-
-# -------------------------
 
 async def gasto(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-
     try:
-        if len(context.args) < 2:
-            raise Exception()
-
         valor = float(context.args[0])
-
         mes, ano, args_limpos = extrair_data(context.args)
-
-        if len(args_limpos) < 2:
-            raise Exception()
-
         categoria = args_limpos[1].lower()
-        descricao = " ".join(args_limpos[2:]) if len(args_limpos) > 2 else ""
-
+        descricao = " ".join(args_limpos[2:])
     except:
-        await update.message.reply_text(
-            "Formato: /gasto valor categoria descricao [mes-ano]"
-        )
+        await update.message.reply_text("Formato errado. Exemplo: /gasto 50 comida almoço 03-2026")
         return
 
     df = pd.read_csv(ARQUIVO)
 
-    novo = pd.DataFrame([[ 
-        user_id,
-        f"01/{mes:02d}/{ano}",
-        mes,
-        ano,
-        descricao,
-        categoria,
-        -abs(valor)
-    ]], columns=df.columns)
-
+    novo = pd.DataFrame([[user_id, f"01/{mes:02d}/{ano}", mes, ano, descricao, categoria, -abs(valor)]],
+                        columns=df.columns)
     df = pd.concat([df, novo], ignore_index=True)
     df.to_csv(ARQUIVO, index=False)
 
     await verificar_meta(update, user_id, categoria, mes, ano)
-
     await update.message.reply_text("💸 Gasto registrado.")
-
-# -------------------------
 
 async def receita(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-
     try:
-        if len(context.args) < 2:
-            raise Exception()
-
         valor = float(context.args[0])
-
         mes, ano, args_limpos = extrair_data(context.args)
-
-        if len(args_limpos) < 2:
-            raise Exception()
-
         categoria = args_limpos[1].lower()
-        descricao = " ".join(args_limpos[2:]) if len(args_limpos) > 2 else ""
-
+        descricao = " ".join(args_limpos[2:])
     except:
-        await update.message.reply_text(
-            "Formato: /receita valor categoria descricao [mes-ano]"
-        )
+        await update.message.reply_text("Formato errado. Exemplo: /receita 100 salario 03-2026")
         return
 
     df = pd.read_csv(ARQUIVO)
 
-    novo = pd.DataFrame([[
-        user_id,
-        f"01/{mes:02d}/{ano}",
-        mes,
-        ano,
-        descricao,
-        categoria,
-        abs(valor)
-    ]], columns=df.columns)
-
+    novo = pd.DataFrame([[user_id, f"01/{mes:02d}/{ano}", mes, ano, descricao, categoria, abs(valor)]],
+                        columns=df.columns)
     df = pd.concat([df, novo], ignore_index=True)
     df.to_csv(ARQUIVO, index=False)
 
     await update.message.reply_text("💰 Receita registrada.")
 
 # =========================
-# META
+# METAS
 # =========================
 
 async def setmeta(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-
     try:
-        if len(context.args) != 2:
-            raise Exception()
-
         categoria = context.args[0].lower()
         valor = float(context.args[1])
-
     except:
-        await update.message.reply_text(
-            "Formato: /setmeta categoria valor"
-        )
+        await update.message.reply_text("Use: /setmeta categoria valor")
         return
 
     df_meta = pd.read_csv(ARQ_METAS)
+    df_meta = df_meta[~((df_meta["UserID"] == user_id) & (df_meta["Categoria"] == categoria))]
 
-    df_meta = df_meta[~(
-        (df_meta["UserID"] == user_id) &
-        (df_meta["Categoria"] == categoria)
-    )]
-
-    nova = pd.DataFrame([[
-        user_id, categoria, valor
-    ]], columns=df_meta.columns)
-
+    nova = pd.DataFrame([[user_id, categoria, valor]], columns=df_meta.columns)
     df_meta = pd.concat([df_meta, nova], ignore_index=True)
     df_meta.to_csv(ARQ_METAS, index=False)
 
     await update.message.reply_text("🎯 Meta definida.")
 
-# =========================
-# VERIFICAR META
-# =========================
-
 async def verificar_meta(update, user_id, categoria, mes, ano):
     df = pd.read_csv(ARQUIVO)
     df_meta = pd.read_csv(ARQ_METAS)
 
-    df_user = df[
-        (df["UserID"] == user_id) &
-        (df["Mes"] == mes) &
-        (df["Ano"] == ano) &
-        (df["Categoria"] == categoria)
-    ]
-
+    df_user = df[(df["UserID"] == user_id) & (df["Mes"] == mes) & (df["Ano"] == ano) & (df["Categoria"] == categoria)]
     gasto_total = abs(df_user[df_user["Valor"] < 0]["Valor"].sum())
 
-    meta = df_meta[
-        (df_meta["UserID"] == user_id) &
-        (df_meta["Categoria"] == categoria)
-    ]
-
+    meta = df_meta[(df_meta["UserID"] == user_id) & (df_meta["Categoria"] == categoria)]
     if meta.empty:
         return
 
     limite = meta.iloc[0]["Meta"]
-
     if gasto_total >= limite:
-        await update.message.reply_text(
-            f"🚨 Você ultrapassou a meta de {categoria}"
-        )
-
+        await update.message.reply_text(f"🚨 Você ultrapassou a meta de {categoria}")
     elif gasto_total >= limite * 0.8:
-        await update.message.reply_text(
-            f"⚠️ Você já usou 80% da meta de {categoria}"
-        )
+        await update.message.reply_text(f"⚠️ Você já usou 80% da meta de {categoria}")
 
 # =========================
 # RESUMO
@@ -248,15 +160,10 @@ async def verificar_meta(update, user_id, categoria, mes, ano):
 async def resumo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     df = pd.read_csv(ARQUIVO)
-
     df = df[df["UserID"] == user_id]
 
     if len(context.args) == 1:
-        try:
-            mes, ano = map(int, context.args[0].split("-"))
-        except:
-            await update.message.reply_text("Formato: mes-ano")
-            return
+        mes, ano = map(int, context.args[0].split("-"))
     else:
         mes, ano = mes_atual()
 
@@ -270,13 +177,7 @@ async def resumo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     despesas = abs(df[df["Valor"] < 0]["Valor"].sum())
     saldo = receitas - despesas
 
-    ranking = (
-        df[df["Valor"] < 0]
-        .groupby("Categoria")["Valor"]
-        .sum()
-        .abs()
-        .sort_values(ascending=False)
-    )
+    ranking = df[df["Valor"] < 0].groupby("Categoria")["Valor"].sum().abs().sort_values(ascending=False)
 
     msg = f"📊 Resumo {mes:02d}-{ano}\n\n"
     msg += f"Receitas: R$ {receitas:.2f}\n"
@@ -290,27 +191,20 @@ async def resumo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(msg)
 
 # =========================
-# COMPARAR
+# COMPARAÇÃO ENTRE MESES
 # =========================
 
 async def comparar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-
     if len(context.args) != 2:
-        await update.message.reply_text(
-            "Use: /comparar 02-2026 03-2026"
-        )
+        await update.message.reply_text("Use: /comparar 02-2026 03-2026")
         return
 
     df = pd.read_csv(ARQUIVO)
     df = df[df["UserID"] == user_id]
 
-    try:
-        mes1, ano1 = map(int, context.args[0].split("-"))
-        mes2, ano2 = map(int, context.args[1].split("-"))
-    except:
-        await update.message.reply_text("Formato inválido.")
-        return
+    mes1, ano1 = map(int, context.args[0].split("-"))
+    mes2, ano2 = map(int, context.args[1].split("-"))
 
     total1 = abs(df[(df["Mes"]==mes1)&(df["Ano"]==ano1)&(df["Valor"]<0)]["Valor"].sum())
     total2 = abs(df[(df["Mes"]==mes2)&(df["Ano"]==ano2)&(df["Valor"]<0)]["Valor"].sum())
@@ -320,25 +214,25 @@ async def comparar(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     variacao = ((total2 - total1) / total1) * 100
-
     await update.message.reply_text(
-        f"📊 Comparação:\n"
-        f"{mes1:02d}-{ano1}: R$ {total1:.2f}\n"
-        f"{mes2:02d}-{ano2}: R$ {total2:.2f}\n"
-        f"Variação: {variacao:.2f}%"
+        f"📊 Comparação:\n{mes1:02d}-{ano1}: R$ {total1:.2f}\n{mes2:02d}-{ano2}: R$ {total2:.2f}\nVariação: {variacao:.2f}%"
     )
 
 # =========================
-# BOT INIT
+# BOT
 # =========================
 
 app = ApplicationBuilder().token(TOKEN).build()
 
-app.add_handler(CommandHandler("start", start))
 app.add_handler(CommandHandler("gasto", gasto))
 app.add_handler(CommandHandler("receita", receita))
 app.add_handler(CommandHandler("resumo", resumo))
 app.add_handler(CommandHandler("setmeta", setmeta))
 app.add_handler(CommandHandler("comparar", comparar))
 
-app.run_polling()
+# =========================
+# EXECUÇÃO
+# =========================
+
+if __name__ == "__main__":
+    app.run_polling()
