@@ -1,167 +1,84 @@
 import os
-import logging
+import psycopg2
 from datetime import datetime
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
-# =========================
-# CONFIG
-# =========================
-
 TOKEN = os.getenv("TOKEN")
-ARQUIVO = "gastos.csv"
+DATABASE_URL = os.getenv("DATABASE_URL")
 
-logging.basicConfig(
-    format="%(asctime)s - %(levelname)s - %(message)s",
-    level=logging.INFO
+print("TOKEN:", TOKEN)
+print("DATABASE_URL:", DATABASE_URL)
+
+conn = psycopg2.connect(DATABASE_URL)
+cursor = conn.cursor()
+
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS gastos (
+    id SERIAL PRIMARY KEY,
+    data DATE,
+    valor FLOAT,
+    categoria TEXT
 )
+""")
+conn.commit()
 
-# =========================
-# CRIAR CSV
-# =========================
-
-if not os.path.exists(ARQUIVO):
-    df = pd.DataFrame(columns=["data", "valor", "categoria"])
-    df.to_csv(ARQUIVO, index=False)
-
-# =========================
-# START
-# =========================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "Bot financeiro ativo ✅\n\n"
+        "/gasto valor categoria\n"
+        "/saldo\n"
+        "/reset"
+    )
 
-    texto = """
-💰 Controle de Gastos
-
-Comandos:
-
-/gasto 50 mercado
-/resumo
-/reset
-"""
-
-    await update.message.reply_text(texto)
-
-# =========================
-# GASTO
-# =========================
 
 async def gasto(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
     try:
-
         valor = float(context.args[0])
         categoria = " ".join(context.args[1:])
+        data = datetime.now().date()
 
-        df = pd.read_csv(ARQUIVO)
-
-        novo = pd.DataFrame([{
-            "data": datetime.now().strftime("%Y-%m-%d"),
-            "valor": valor,
-            "categoria": categoria
-        }])
-
-        df = pd.concat([df, novo], ignore_index=True)
-
-        df.to_csv(ARQUIVO, index=False)
+        cursor.execute(
+            "INSERT INTO gastos (data, valor, categoria) VALUES (%s,%s,%s)",
+            (data, valor, categoria)
+        )
+        conn.commit()
 
         await update.message.reply_text(
-            f"✅ Gasto registrado\n\nR$ {valor}\n{categoria}"
+            f"Gasto registrado ✅\nR$ {valor} - {categoria}"
         )
 
-    except Exception as e:
-
-        logging.error(e)
-
+    except:
         await update.message.reply_text(
             "Use assim:\n/gasto 50 mercado"
         )
 
-# =========================
-# RESUMO
-# =========================
 
-async def resumo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def saldo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    cursor.execute("SELECT SUM(valor) FROM gastos")
+    total = cursor.fetchone()[0]
 
-    try:
+    if total is None:
+        total = 0
 
-        df = pd.read_csv(ARQUIVO)
+    await update.message.reply_text(f"Total gasto: R$ {total}")
 
-        if df.empty:
-            await update.message.reply_text("Nenhum gasto registrado.")
-            return
-
-        df["data"] = pd.to_datetime(df["data"])
-
-        mes = datetime.now().month
-        ano = datetime.now().year
-
-        df_mes = df[(df["data"].dt.month == mes) & (df["data"].dt.year == ano)]
-
-        total = df_mes["valor"].sum()
-
-        categorias = df_mes.groupby("categoria")["valor"].sum()
-
-        texto = f"📊 Resumo do mês\n\n💰 Total: R$ {total}\n\n"
-
-        for cat, val in categorias.items():
-            texto += f"{cat}: R$ {val}\n"
-
-        await update.message.reply_text(texto)
-
-    except Exception as e:
-
-        logging.error(e)
-
-        await update.message.reply_text("Erro ao gerar resumo.")
-
-# =========================
-# RESET
-# =========================
 
 async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    cursor.execute("DELETE FROM gastos")
+    conn.commit()
 
-    try:
+    await update.message.reply_text("Dados resetados ✅")
 
-        df = pd.read_csv(ARQUIVO)
 
-        df["data"] = pd.to_datetime(df["data"])
+app = ApplicationBuilder().token(TOKEN).build()
 
-        mes = datetime.now().month
-        ano = datetime.now().year
+app.add_handler(CommandHandler("start", start))
+app.add_handler(CommandHandler("gasto", gasto))
+app.add_handler(CommandHandler("saldo", saldo))
+app.add_handler(CommandHandler("reset", reset))
 
-        df = df[~((df["data"].dt.month == mes) & (df["data"].dt.year == ano))]
+print("Bot rodando...")
 
-        df.to_csv(ARQUIVO, index=False)
-
-        await update.message.reply_text("🗑️ Mês atual apagado.")
-
-    except Exception as e:
-
-        logging.error(e)
-
-        await update.message.reply_text("Erro ao resetar.")
-
-# =========================
-# MAIN
-# =========================
-
-def main():
-
-    if TOKEN is None:
-        print("TOKEN não encontrado!")
-        return
-
-    app = ApplicationBuilder().token(TOKEN).build()
-
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("gasto", gasto))
-    app.add_handler(CommandHandler("resumo", resumo))
-    app.add_handler(CommandHandler("reset", reset))
-
-    print("Bot rodando...")
-
-    app.run_polling()
-
-if __name__ == "__main__":
-    main()
+app.run_polling()
