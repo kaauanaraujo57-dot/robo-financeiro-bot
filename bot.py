@@ -1,311 +1,174 @@
 import os
-import psycopg2
+import logging
+import pandas as pd
 from datetime import datetime
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
 TOKEN = os.getenv("TOKEN")
-DATABASE_URL = os.getenv("DATABASE_URL")
 
-conn = psycopg2.connect(DATABASE_URL)
-cursor = conn.cursor()
+logging.basicConfig(level=logging.INFO)
 
-cursor.execute("""
-CREATE TABLE IF NOT EXISTS transacoes (
-id SERIAL PRIMARY KEY,
-user_id BIGINT,
-tipo TEXT,
-valor FLOAT,
-categoria TEXT,
-data TIMESTAMP
-)
-""")
+ARQUIVO = "dados.csv"
 
-conn.commit()
+# Criar arquivo se não existir
+if not os.path.exists(ARQUIVO):
+    df = pd.DataFrame(columns=["data", "tipo", "valor", "categoria"])
+    df.to_csv(ARQUIVO, index=False)
+
+
+def carregar_dados():
+    return pd.read_csv(ARQUIVO)
+
+
+def salvar_dados(df):
+    df.to_csv(ARQUIVO, index=False)
 
 
 # START
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    mensagem = """
+💰 *Bem vindo ao Bot Financeiro*
 
-    texto = """
-💰 *Bot Financeiro PRO*
+Use os comandos:
 
-Controle seu dinheiro direto no Telegram.
+/gasto valor categoria
+Ex: /gasto 50 mercado
 
-Digite:
+/receita valor categoria
+Ex: /receita 200 salario
+
+/extrato
+Mostra todas movimentações
+
+/resumo
+Resumo do mês
+
+/reset_mes
+Apaga dados do mês atual
+
 /ajuda
+Ver comandos
 """
-
-    await update.message.reply_text(texto, parse_mode="Markdown")
+    await update.message.reply_text(mensagem, parse_mode="Markdown")
 
 
 # AJUDA
 async def ajuda(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
-    texto = """
-📊 *Comandos*
-
-💰 Receitas
-/receita 2000 salario
-
-💸 Gastos
-/gasto 50 mercado
-
-📊 Relatórios
-/saldo
-/extrato
-/mes
-
-📈 Estatísticas
-/topgastos
-/categorias
-
-⚙️ Sistema
-/delete ID
-/reset
-"""
-
-    await update.message.reply_text(texto, parse_mode="Markdown")
-
-
-# RECEITA
-async def receita(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
-    user_id = update.message.from_user.id
-
-    try:
-        valor = float(context.args[0])
-        categoria = " ".join(context.args[1:])
-    except:
-        await update.message.reply_text("Use: /receita VALOR CATEGORIA")
-        return
-
-    cursor.execute(
-        "INSERT INTO transacoes (user_id,tipo,valor,categoria,data) VALUES (%s,%s,%s,%s,%s)",
-        (user_id, "receita", valor, categoria, datetime.now())
-    )
-
-    conn.commit()
-
-    await update.message.reply_text(f"✅ Receita registrada\nR$ {valor} - {categoria}")
+    await start(update, context)
 
 
 # GASTO
 async def gasto(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
-    user_id = update.message.from_user.id
-
     try:
         valor = float(context.args[0])
-        categoria = " ".join(context.args[1:])
+        categoria = context.args[1]
+
+        df = carregar_dados()
+
+        nova_linha = {
+            "data": datetime.now().strftime("%d/%m/%Y"),
+            "tipo": "gasto",
+            "valor": valor,
+            "categoria": categoria
+        }
+
+        df = pd.concat([df, pd.DataFrame([nova_linha])], ignore_index=True)
+        salvar_dados(df)
+
+        await update.message.reply_text(f"💸 Gasto registrado\nValor: R${valor}\nCategoria: {categoria}")
+
     except:
-        await update.message.reply_text("Use: /gasto VALOR CATEGORIA")
-        return
-
-    cursor.execute(
-        "INSERT INTO transacoes (user_id,tipo,valor,categoria,data) VALUES (%s,%s,%s,%s,%s)",
-        (user_id, "gasto", valor, categoria, datetime.now())
-    )
-
-    conn.commit()
-
-    await update.message.reply_text(f"💸 Gasto registrado\nR$ {valor} - {categoria}")
+        await update.message.reply_text("Use:\n/gasto 50 mercado")
 
 
-# SALDO
-async def saldo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
-    user_id = update.message.from_user.id
-
-    cursor.execute("""
-    SELECT
-    SUM(CASE WHEN tipo='receita' THEN valor ELSE 0 END),
-    SUM(CASE WHEN tipo='gasto' THEN valor ELSE 0 END)
-    FROM transacoes
-    WHERE user_id=%s
-    """, (user_id,))
-
-    receitas, gastos = cursor.fetchone()
-
-    receitas = receitas or 0
-    gastos = gastos or 0
-
-    saldo = receitas - gastos
-
-    texto = f"""
-📊 *Saldo*
-
-💰 Receitas: R$ {receitas:.2f}
-💸 Gastos: R$ {gastos:.2f}
-
-🟢 Saldo: R$ {saldo:.2f}
-"""
-
-    await update.message.reply_text(texto, parse_mode="Markdown")
-
-
-# EXTRATO COM DATA
-async def extrato(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
-    user_id = update.message.from_user.id
-
-    cursor.execute("""
-    SELECT id,tipo,valor,categoria,data
-    FROM transacoes
-    WHERE user_id=%s
-    ORDER BY data DESC
-    LIMIT 10
-    """, (user_id,))
-
-    dados = cursor.fetchall()
-
-    if not dados:
-        await update.message.reply_text("Sem movimentações.")
-        return
-
-    texto = "📋 *Últimas movimentações*\n\n"
-
-    for id_, tipo, valor, categoria, data in dados:
-
-        emoji = "💰" if tipo == "receita" else "💸"
-        data_formatada = data.strftime("%d/%m")
-
-        texto += f"{emoji} #{id_} | {data_formatada}\n{categoria} - R$ {valor}\n\n"
-
-    await update.message.reply_text(texto, parse_mode="Markdown")
-
-
-# RESUMO MES
-async def mes(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
-    user_id = update.message.from_user.id
-    mes_atual = datetime.now().month
-
-    cursor.execute("""
-    SELECT
-    SUM(CASE WHEN tipo='receita' THEN valor ELSE 0 END),
-    SUM(CASE WHEN tipo='gasto' THEN valor ELSE 0 END)
-    FROM transacoes
-    WHERE user_id=%s AND EXTRACT(MONTH FROM data)=%s
-    """, (user_id, mes_atual))
-
-    receitas, gastos = cursor.fetchone()
-
-    receitas = receitas or 0
-    gastos = gastos or 0
-
-    saldo = receitas - gastos
-
-    texto = f"""
-📅 *Resumo do mês*
-
-💰 Receitas: R$ {receitas:.2f}
-💸 Gastos: R$ {gastos:.2f}
-
-Saldo: R$ {saldo:.2f}
-"""
-
-    await update.message.reply_text(texto, parse_mode="Markdown")
-
-
-# TOP GASTOS
-async def topgastos(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
-    user_id = update.message.from_user.id
-
-    cursor.execute("""
-    SELECT categoria, SUM(valor)
-    FROM transacoes
-    WHERE user_id=%s AND tipo='gasto'
-    GROUP BY categoria
-    ORDER BY SUM(valor) DESC
-    LIMIT 5
-    """, (user_id,))
-
-    dados = cursor.fetchall()
-
-    if not dados:
-        await update.message.reply_text("Sem dados.")
-        return
-
-    texto = "📉 *Top gastos*\n\n"
-
-    for categoria, total in dados:
-        texto += f"{categoria} - R$ {total:.2f}\n"
-
-    await update.message.reply_text(texto, parse_mode="Markdown")
-
-
-# CATEGORIAS
-async def categorias(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
-    user_id = update.message.from_user.id
-
-    cursor.execute("""
-    SELECT categoria, COUNT(*)
-    FROM transacoes
-    WHERE user_id=%s
-    GROUP BY categoria
-    ORDER BY COUNT(*) DESC
-    """, (user_id,))
-
-    dados = cursor.fetchall()
-
-    texto = "📊 *Categorias usadas*\n\n"
-
-    for categoria, total in dados:
-        texto += f"{categoria} ({total})\n"
-
-    await update.message.reply_text(texto, parse_mode="Markdown")
-
-
-# DELETE
-async def delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
-    user_id = update.message.from_user.id
-
+# RECEITA
+async def receita(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        id_delete = int(context.args[0])
+        valor = float(context.args[0])
+        categoria = context.args[1]
+
+        df = carregar_dados()
+
+        nova_linha = {
+            "data": datetime.now().strftime("%d/%m/%Y"),
+            "tipo": "receita",
+            "valor": valor,
+            "categoria": categoria
+        }
+
+        df = pd.concat([df, pd.DataFrame([nova_linha])], ignore_index=True)
+        salvar_dados(df)
+
+        await update.message.reply_text(f"💰 Receita registrada\nValor: R${valor}\nCategoria: {categoria}")
+
     except:
-        await update.message.reply_text("Use: /delete ID")
+        await update.message.reply_text("Use:\n/receita 500 salario")
+
+
+# EXTRATO
+async def extrato(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    df = carregar_dados()
+
+    if df.empty:
+        await update.message.reply_text("Nenhuma movimentação ainda.")
         return
 
-    cursor.execute(
-        "DELETE FROM transacoes WHERE id=%s AND user_id=%s",
-        (id_delete, user_id)
-    )
+    mensagem = "📄 Extrato:\n\n"
 
-    conn.commit()
+    for _, row in df.iterrows():
+        emoji = "💰" if row["tipo"] == "receita" else "💸"
+        mensagem += f"{emoji} {row['data']} | {row['categoria']} | R${row['valor']}\n"
 
-    await update.message.reply_text("🗑 Transação removida.")
+    await update.message.reply_text(mensagem)
 
 
-# RESET
-async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# RESUMO
+async def resumo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    df = carregar_dados()
 
-    user_id = update.message.from_user.id
+    receitas = df[df["tipo"] == "receita"]["valor"].sum()
+    gastos = df[df["tipo"] == "gasto"]["valor"].sum()
 
-    cursor.execute("DELETE FROM transacoes WHERE user_id=%s", (user_id,))
-    conn.commit()
+    saldo = receitas - gastos
 
-    await update.message.reply_text("⚠️ Todos dados foram apagados.")
+    mensagem = f"""
+📊 Resumo Financeiro
+
+💰 Receitas: R${receitas}
+
+💸 Gastos: R${gastos}
+
+💵 Saldo: R${saldo}
+"""
+
+    await update.message.reply_text(mensagem)
+
+
+# RESET MES
+async def reset_mes(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    df = pd.DataFrame(columns=["data", "tipo", "valor", "categoria"])
+    salvar_dados(df)
+
+    await update.message.reply_text("🧹 Dados do mês apagados.")
 
 
 # MAIN
-app = ApplicationBuilder().token(TOKEN).build()
+def main():
+    app = ApplicationBuilder().token(TOKEN).build()
 
-app.add_handler(CommandHandler("start", start))
-app.add_handler(CommandHandler("ajuda", ajuda))
-app.add_handler(CommandHandler("receita", receita))
-app.add_handler(CommandHandler("gasto", gasto))
-app.add_handler(CommandHandler("saldo", saldo))
-app.add_handler(CommandHandler("extrato", extrato))
-app.add_handler(CommandHandler("mes", mes))
-app.add_handler(CommandHandler("topgastos", topgastos))
-app.add_handler(CommandHandler("categorias", categorias))
-app.add_handler(CommandHandler("delete", delete))
-app.add_handler(CommandHandler("reset", reset))
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("ajuda", ajuda))
+    app.add_handler(CommandHandler("gasto", gasto))
+    app.add_handler(CommandHandler("receita", receita))
+    app.add_handler(CommandHandler("extrato", extrato))
+    app.add_handler(CommandHandler("resumo", resumo))
+    app.add_handler(CommandHandler("reset_mes", reset_mes))
 
-print("BOT ONLINE 🚀")
+    print("Bot rodando...")
+    app.run_polling()
 
-app.run_polling()
+
+if __name__ == "__main__":
+    main()
