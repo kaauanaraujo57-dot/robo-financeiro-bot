@@ -3,8 +3,8 @@ from datetime import datetime, timedelta
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
-TOKEN = "SEU_TOKEN_AQUI"
-ADMIN_ID = 123456789  # seu id do telegram
+TOKEN = 8654443090:AAGjfMQDEU8o9S47rJnly5FS-l4BMoM2OHU
+ADMIN_ID = KA030303
 
 # =========================
 # BANCO DE DADOS
