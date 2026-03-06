@@ -8,87 +8,80 @@ TOKEN = os.getenv("TOKEN")
 
 ADMIN_ID = 1323854764
 
-conn = sqlite3.connect("dados.db", check_same_thread=False)
+conn = sqlite3.connect("financeiro.db", check_same_thread=False)
 cursor = conn.cursor()
 
 cursor.execute("""
-CREATE TABLE IF NOT EXISTS transacoes (
-    user_id INTEGER,
-    tipo TEXT,
-    valor REAL,
-    descricao TEXT,
-    data TEXT
+CREATE TABLE IF NOT EXISTS usuarios (
+user_id INTEGER PRIMARY KEY,
+plano TEXT
 )
 """)
 
 cursor.execute("""
-CREATE TABLE IF NOT EXISTS usuarios (
-    user_id INTEGER PRIMARY KEY,
-    plano TEXT
+CREATE TABLE IF NOT EXISTS transacoes (
+user_id INTEGER,
+tipo TEXT,
+valor REAL,
+descricao TEXT,
+data TEXT
 )
 """)
 
 conn.commit()
 
 
-def verificar_plano(user_id):
-    cursor.execute("SELECT plano FROM usuarios WHERE user_id=?", (user_id,))
-    resultado = cursor.fetchone()
-
-    if resultado:
-        return True
-    return False
-
-
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     user = update.effective_user.id
 
-    cursor.execute("INSERT OR IGNORE INTO usuarios VALUES (?,?)", (user, "free"))
+    cursor.execute(
+        "INSERT OR IGNORE INTO usuarios VALUES (?,?)",
+        (user, "free")
+    )
+
     conn.commit()
 
     await update.message.reply_text(
-        """
-💰 *Bem vindo ao Bot Financeiro*
+"""
+💰 Bem vindo ao BOT FINANCEIRO
 
-Comandos principais:
+Comandos:
 
-/receita valor descrição
-/despesa valor descrição
+/receita valor descricao
+/despesa valor descricao
 /saldo
 /extrato
 /reset
 /ajuda
-""",
-        parse_mode="Markdown"
-    )
+"""
+)
 
 
 async def ajuda(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(
-        """
-📊 *COMANDOS*
+"""
+📊 COMANDOS
 
-/receita valor descrição
+/receita valor descricao
 Ex:
 /receita 500 salario
 
-/despesa valor descrição
+/despesa valor descricao
 Ex:
 /despesa 100 mercado
 
 /saldo
-Mostra seu saldo
+Mostra saldo atual
 
 /extrato
-Mostra suas movimentações
+Lista movimentações
 
 /reset
-Apaga seus dados do mês
-""",
-        parse_mode="Markdown"
-    )
+Apaga seus dados
+"""
+)
 
 
 async def receita(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -96,7 +89,7 @@ async def receita(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user.id
 
     if len(context.args) < 2:
-        await update.message.reply_text("Use: /receita valor descrição")
+        await update.message.reply_text("Use: /receita valor descricao")
         return
 
     valor = float(context.args[0])
@@ -108,9 +101,10 @@ async def receita(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "INSERT INTO transacoes VALUES (?,?,?,?,?)",
         (user, "receita", valor, descricao, data)
     )
+
     conn.commit()
 
-    await update.message.reply_text(f"✅ Receita adicionada: R$ {valor}")
+    await update.message.reply_text(f"✅ Receita adicionada R$ {valor}")
 
 
 async def despesa(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -118,7 +112,7 @@ async def despesa(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user.id
 
     if len(context.args) < 2:
-        await update.message.reply_text("Use: /despesa valor descrição")
+        await update.message.reply_text("Use: /despesa valor descricao")
         return
 
     valor = float(context.args[0])
@@ -130,9 +124,10 @@ async def despesa(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "INSERT INTO transacoes VALUES (?,?,?,?,?)",
         (user, "despesa", valor, descricao, data)
     )
+
     conn.commit()
 
-    await update.message.reply_text(f"❌ Despesa adicionada: R$ {valor}")
+    await update.message.reply_text(f"❌ Despesa adicionada R$ {valor}")
 
 
 async def saldo(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -170,7 +165,7 @@ async def extrato(update: Update, context: ContextTypes.DEFAULT_TYPE):
     dados = cursor.fetchall()
 
     if not dados:
-        await update.message.reply_text("Nenhuma movimentação.")
+        await update.message.reply_text("Sem movimentações.")
         return
 
     texto = "📄 EXTRATO\n\n"
@@ -198,7 +193,7 @@ async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     conn.commit()
 
-    await update.message.reply_text("♻️ Dados resetados.")
+    await update.message.reply_text("♻️ Dados apagados.")
 
 
 async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -212,16 +207,16 @@ async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     total = cursor.fetchone()[0]
 
     await update.message.reply_text(
-        f"""
+f"""
 👑 PAINEL ADMIN
 
-Usuários cadastrados: {total}
+Usuários: {total}
 
 Comandos:
 
 /addplano ID
 """
-    )
+)
 
 
 async def addplano(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -232,7 +227,7 @@ async def addplano(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if not context.args:
-        await update.message.reply_text("Use /addplano ID")
+        await update.message.reply_text("Use: /addplano ID")
         return
 
     uid = int(context.args[0])
@@ -244,7 +239,7 @@ async def addplano(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     conn.commit()
 
-    await update.message.reply_text("Plano liberado!")
+    await update.message.reply_text("✅ Plano liberado!")
 
 
 app = ApplicationBuilder().token(TOKEN).build()
