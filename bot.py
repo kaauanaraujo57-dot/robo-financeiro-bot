@@ -7,20 +7,17 @@ from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 TOKEN = os.getenv("TOKEN")
 DATABASE_URL = os.getenv("DATABASE_URL")
 
-print("TOKEN:", TOKEN)
-print("DATABASE_URL:", DATABASE_URL)
-
 conn = psycopg2.connect(DATABASE_URL)
 cursor = conn.cursor()
 
 cursor.execute("""
 CREATE TABLE IF NOT EXISTS transacoes (
-    id SERIAL PRIMARY KEY,
-    user_id BIGINT,
-    tipo TEXT,
-    valor FLOAT,
-    categoria TEXT,
-    data TIMESTAMP
+id SERIAL PRIMARY KEY,
+user_id BIGINT,
+tipo TEXT,
+valor FLOAT,
+categoria TEXT,
+data TIMESTAMP
 )
 """)
 
@@ -29,14 +26,16 @@ conn.commit()
 
 # START
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
     texto = """
-👋 Bem vindo ao *Bot Financeiro*
+💰 *Bot Financeiro PRO*
 
 Controle seu dinheiro direto no Telegram.
 
 Digite:
 /ajuda
 """
+
     await update.message.reply_text(texto, parse_mode="Markdown")
 
 
@@ -44,18 +43,12 @@ Digite:
 async def ajuda(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     texto = """
-📊 *Comandos do Bot*
+📊 *Comandos*
 
 💰 Receitas
-/receita VALOR CATEGORIA
-
-Ex:
-/receita 2500 salario
+/receita 2000 salario
 
 💸 Gastos
-/gasto VALOR CATEGORIA
-
-Ex:
 /gasto 50 mercado
 
 📊 Relatórios
@@ -63,9 +56,13 @@ Ex:
 /extrato
 /mes
 
+📈 Estatísticas
+/topgastos
+/categorias
+
 ⚙️ Sistema
+/delete ID
 /reset
-/ajuda
 """
 
     await update.message.reply_text(texto, parse_mode="Markdown")
@@ -121,7 +118,7 @@ async def saldo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
 
     cursor.execute("""
-    SELECT 
+    SELECT
     SUM(CASE WHEN tipo='receita' THEN valor ELSE 0 END),
     SUM(CASE WHEN tipo='gasto' THEN valor ELSE 0 END)
     FROM transacoes
@@ -136,7 +133,7 @@ async def saldo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     saldo = receitas - gastos
 
     texto = f"""
-📊 Saldo atual
+📊 *Saldo*
 
 💰 Receitas: R$ {receitas:.2f}
 💸 Gastos: R$ {gastos:.2f}
@@ -144,16 +141,16 @@ async def saldo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 🟢 Saldo: R$ {saldo:.2f}
 """
 
-    await update.message.reply_text(texto)
+    await update.message.reply_text(texto, parse_mode="Markdown")
 
 
-# EXTRATO
+# EXTRATO COM DATA
 async def extrato(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     user_id = update.message.from_user.id
 
     cursor.execute("""
-    SELECT tipo,valor,categoria,data
+    SELECT id,tipo,valor,categoria,data
     FROM transacoes
     WHERE user_id=%s
     ORDER BY data DESC
@@ -166,26 +163,26 @@ async def extrato(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Sem movimentações.")
         return
 
-    texto = "📋 Últimas movimentações\n\n"
+    texto = "📋 *Últimas movimentações*\n\n"
 
-    for tipo, valor, categoria, data in dados:
+    for id_, tipo, valor, categoria, data in dados:
 
         emoji = "💰" if tipo == "receita" else "💸"
+        data_formatada = data.strftime("%d/%m")
 
-        texto += f"{emoji} {categoria} - R$ {valor}\n"
+        texto += f"{emoji} #{id_} | {data_formatada}\n{categoria} - R$ {valor}\n\n"
 
-    await update.message.reply_text(texto)
+    await update.message.reply_text(texto, parse_mode="Markdown")
 
 
-# RESUMO DO MES
+# RESUMO MES
 async def mes(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     user_id = update.message.from_user.id
-
     mes_atual = datetime.now().month
 
     cursor.execute("""
-    SELECT 
+    SELECT
     SUM(CASE WHEN tipo='receita' THEN valor ELSE 0 END),
     SUM(CASE WHEN tipo='gasto' THEN valor ELSE 0 END)
     FROM transacoes
@@ -200,7 +197,7 @@ async def mes(update: Update, context: ContextTypes.DEFAULT_TYPE):
     saldo = receitas - gastos
 
     texto = f"""
-📅 Resumo do mês
+📅 *Resumo do mês*
 
 💰 Receitas: R$ {receitas:.2f}
 💸 Gastos: R$ {gastos:.2f}
@@ -208,7 +205,79 @@ async def mes(update: Update, context: ContextTypes.DEFAULT_TYPE):
 Saldo: R$ {saldo:.2f}
 """
 
-    await update.message.reply_text(texto)
+    await update.message.reply_text(texto, parse_mode="Markdown")
+
+
+# TOP GASTOS
+async def topgastos(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    user_id = update.message.from_user.id
+
+    cursor.execute("""
+    SELECT categoria, SUM(valor)
+    FROM transacoes
+    WHERE user_id=%s AND tipo='gasto'
+    GROUP BY categoria
+    ORDER BY SUM(valor) DESC
+    LIMIT 5
+    """, (user_id,))
+
+    dados = cursor.fetchall()
+
+    if not dados:
+        await update.message.reply_text("Sem dados.")
+        return
+
+    texto = "📉 *Top gastos*\n\n"
+
+    for categoria, total in dados:
+        texto += f"{categoria} - R$ {total:.2f}\n"
+
+    await update.message.reply_text(texto, parse_mode="Markdown")
+
+
+# CATEGORIAS
+async def categorias(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    user_id = update.message.from_user.id
+
+    cursor.execute("""
+    SELECT categoria, COUNT(*)
+    FROM transacoes
+    WHERE user_id=%s
+    GROUP BY categoria
+    ORDER BY COUNT(*) DESC
+    """, (user_id,))
+
+    dados = cursor.fetchall()
+
+    texto = "📊 *Categorias usadas*\n\n"
+
+    for categoria, total in dados:
+        texto += f"{categoria} ({total})\n"
+
+    await update.message.reply_text(texto, parse_mode="Markdown")
+
+
+# DELETE
+async def delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    user_id = update.message.from_user.id
+
+    try:
+        id_delete = int(context.args[0])
+    except:
+        await update.message.reply_text("Use: /delete ID")
+        return
+
+    cursor.execute(
+        "DELETE FROM transacoes WHERE id=%s AND user_id=%s",
+        (id_delete, user_id)
+    )
+
+    conn.commit()
+
+    await update.message.reply_text("🗑 Transação removida.")
 
 
 # RESET
@@ -219,7 +288,7 @@ async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cursor.execute("DELETE FROM transacoes WHERE user_id=%s", (user_id,))
     conn.commit()
 
-    await update.message.reply_text("🗑 Todos dados foram apagados.")
+    await update.message.reply_text("⚠️ Todos dados foram apagados.")
 
 
 # MAIN
@@ -232,6 +301,9 @@ app.add_handler(CommandHandler("gasto", gasto))
 app.add_handler(CommandHandler("saldo", saldo))
 app.add_handler(CommandHandler("extrato", extrato))
 app.add_handler(CommandHandler("mes", mes))
+app.add_handler(CommandHandler("topgastos", topgastos))
+app.add_handler(CommandHandler("categorias", categorias))
+app.add_handler(CommandHandler("delete", delete))
 app.add_handler(CommandHandler("reset", reset))
 
 print("BOT ONLINE 🚀")
