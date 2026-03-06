@@ -6,7 +6,7 @@ from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
 TOKEN = os.getenv("TOKEN")
 
-ADMIN_ID = 123456789  # coloque seu ID aqui
+ADMIN_ID = 1323854764
 
 conn = sqlite3.connect("financeiro.db", check_same_thread=False)
 cursor = conn.cursor()
