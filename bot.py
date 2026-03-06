@@ -1,27 +1,29 @@
+import os
 import sqlite3
-from datetime import datetime, timedelta
+from datetime import datetime
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
-TOKEN = 8654443090:AAGjfMQDEU8o9S47rJnly5FS-l4BMoM2OHU
-ADMIN_ID = KA030303
+TOKEN = os.getenv("TOKEN")
 
-# =========================
-# BANCO DE DADOS
-# =========================
+ADMIN_ID = 123456789  # coloque seu ID aqui
 
-conn = sqlite3.connect("finance.db", check_same_thread=False)
+conn = sqlite3.connect("financeiro.db", check_same_thread=False)
 cursor = conn.cursor()
 
+# =========================
+# TABELAS
+# =========================
+
 cursor.execute("""
-CREATE TABLE IF NOT EXISTS users(
+CREATE TABLE IF NOT EXISTS usuarios (
 user_id INTEGER PRIMARY KEY,
-expira TEXT
+ativo INTEGER DEFAULT 0
 )
 """)
 
 cursor.execute("""
-CREATE TABLE IF NOT EXISTS transacoes(
+CREATE TABLE IF NOT EXISTS transacoes (
 id INTEGER PRIMARY KEY AUTOINCREMENT,
 user_id INTEGER,
 tipo TEXT,
@@ -34,23 +36,26 @@ data TEXT
 conn.commit()
 
 # =========================
-# FUNÇÃO VERIFICAR PLANO
+# VERIFICAR PLANO
 # =========================
 
-def plano_ativo(user_id):
+def verificar_plano(user):
 
-    cursor.execute("SELECT expira FROM users WHERE user_id=?", (user_id,))
+    cursor.execute(
+        "SELECT ativo FROM usuarios WHERE user_id=?",
+        (user,)
+    )
+
     result = cursor.fetchone()
 
-    if not result:
-        return False
+    if result and result[0] == 1:
+        return True
 
-    data_expira = datetime.strptime(result[0], "%Y-%m-%d")
+    if user == ADMIN_ID:
+        return True
 
-    if datetime.now() > data_expira:
-        return False
+    return False
 
-    return True
 
 # =========================
 # START
@@ -58,9 +63,19 @@ def plano_ativo(user_id):
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
+    user = update.message.from_user.id
+
+    cursor.execute(
+        "INSERT OR IGNORE INTO usuarios (user_id) VALUES (?)",
+        (user,)
+    )
+
+    conn.commit()
+
     await update.message.reply_text(
-        "🤖 Bem vindo ao Bot Financeiro\n\n"
-        "Use /ajuda para ver os comandos."
+        "💰 Bot Financeiro\n\n"
+        "Controle seus gastos direto no Telegram.\n\n"
+        "Use /ajuda"
     )
 
 # =========================
@@ -70,18 +85,31 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def ajuda(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     texto = """
-📊 Comandos disponíveis
+📊 Comandos
 
-/receita valor descrição
-/gasto valor descrição
-
-/extrato
+/gasto 50 mercado
+/receita 1000 salario
 /saldo
+/extrato
+
+💳 Plano
 
 /plano
+/pagar
+
+ℹ️ Outros
+
+/id
 """
 
     await update.message.reply_text(texto)
+
+# =========================
+# ID
+# =========================
+
+async def id(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(f"Seu ID:\n{update.message.from_user.id}")
 
 # =========================
 # PLANO
@@ -89,47 +117,37 @@ async def ajuda(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def plano(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
-    user = update.message.from_user.id
+    texto = """
+💎 PLANO PREMIUM
 
-    cursor.execute("SELECT expira FROM users WHERE user_id=?", (user,))
-    result = cursor.fetchone()
+Acesso completo ao bot
 
-    if not result:
-        await update.message.reply_text("❌ Você não possui plano ativo.")
-        return
+💰 Valor: R$19/mês
 
-    await update.message.reply_text(f"📦 Seu plano expira em {result[0]}")
+Para pagar use:
+
+/pagar
+"""
+
+    await update.message.reply_text(texto)
 
 # =========================
-# RECEITA
+# PAGAR
 # =========================
 
-async def receita(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def pagar(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
-    user = update.message.from_user.id
+    texto = """
+💳 PAGAMENTO
 
-    if not plano_ativo(user):
-        await update.message.reply_text("⚠️ Seu plano expirou.")
-        return
+Envie PIX para:
 
-    try:
+email@pix.com
 
-        valor = float(context.args[0])
-        descricao = " ".join(context.args[1:])
+Após pagar envie o comprovante para o admin.
+"""
 
-        data = datetime.now().strftime("%d/%m/%Y %H:%M")
-
-        cursor.execute("""
-        INSERT INTO transacoes(user_id,tipo,valor,descricao,data)
-        VALUES(?,?,?,?,?)
-        """,(user,"receita",valor,descricao,data))
-
-        conn.commit()
-
-        await update.message.reply_text("✅ Receita adicionada!")
-
-    except:
-        await update.message.reply_text("Use:\n/receita 100 salario")
+    await update.message.reply_text(texto)
 
 # =========================
 # GASTO
@@ -139,28 +157,61 @@ async def gasto(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     user = update.message.from_user.id
 
-    if not plano_ativo(user):
-        await update.message.reply_text("⚠️ Seu plano expirou.")
+    if not verificar_plano(user):
+        await update.message.reply_text("❌ Você precisa do plano.\nUse /plano")
         return
 
     try:
 
         valor = float(context.args[0])
         descricao = " ".join(context.args[1:])
+        data = datetime.now().strftime("%d/%m/%Y")
 
-        data = datetime.now().strftime("%d/%m/%Y %H:%M")
-
-        cursor.execute("""
-        INSERT INTO transacoes(user_id,tipo,valor,descricao,data)
-        VALUES(?,?,?,?,?)
-        """,(user,"gasto",valor,descricao,data))
+        cursor.execute(
+            "INSERT INTO transacoes VALUES (NULL,?,?,?,?,?)",
+            (user, "gasto", valor, descricao, data)
+        )
 
         conn.commit()
 
-        await update.message.reply_text("✅ Gasto registrado!")
+        await update.message.reply_text(
+            f"💸 Gasto registrado\nR${valor} - {descricao}"
+        )
 
     except:
         await update.message.reply_text("Use:\n/gasto 50 mercado")
+
+# =========================
+# RECEITA
+# =========================
+
+async def receita(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    user = update.message.from_user.id
+
+    if not verificar_plano(user):
+        await update.message.reply_text("❌ Você precisa do plano.\nUse /plano")
+        return
+
+    try:
+
+        valor = float(context.args[0])
+        descricao = " ".join(context.args[1:])
+        data = datetime.now().strftime("%d/%m/%Y")
+
+        cursor.execute(
+            "INSERT INTO transacoes VALUES (NULL,?,?,?,?,?)",
+            (user, "receita", valor, descricao, data)
+        )
+
+        conn.commit()
+
+        await update.message.reply_text(
+            f"💰 Receita registrada\nR${valor} - {descricao}"
+        )
+
+    except:
+        await update.message.reply_text("Use:\n/receita 1000 salario")
 
 # =========================
 # SALDO
@@ -170,22 +221,27 @@ async def saldo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     user = update.message.from_user.id
 
-    cursor.execute("""
-    SELECT tipo,valor FROM transacoes WHERE user_id=?
-    """,(user,))
+    if not verificar_plano(user):
+        await update.message.reply_text("❌ Você precisa do plano.")
+        return
+
+    cursor.execute(
+        "SELECT tipo,valor FROM transacoes WHERE user_id=?",
+        (user,)
+    )
 
     dados = cursor.fetchall()
 
     saldo = 0
 
-    for tipo,valor in dados:
+    for tipo, valor in dados:
 
         if tipo == "receita":
             saldo += valor
         else:
             saldo -= valor
 
-    await update.message.reply_text(f"💰 Saldo atual: R${saldo:.2f}")
+    await update.message.reply_text(f"💰 Saldo: R${saldo:.2f}")
 
 # =========================
 # EXTRATO
@@ -195,27 +251,28 @@ async def extrato(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     user = update.message.from_user.id
 
-    cursor.execute("""
-    SELECT tipo,valor,descricao,data
-    FROM transacoes
-    WHERE user_id=?
-    ORDER BY id DESC
-    LIMIT 10
-    """,(user,))
+    if not verificar_plano(user):
+        await update.message.reply_text("❌ Você precisa do plano.")
+        return
+
+    cursor.execute(
+        "SELECT tipo,valor,descricao,data FROM transacoes WHERE user_id=? ORDER BY id DESC LIMIT 10",
+        (user,)
+    )
 
     dados = cursor.fetchall()
 
     if not dados:
-        await update.message.reply_text("Sem movimentações.")
+        await update.message.reply_text("Nenhuma transação.")
         return
 
-    texto = "📊 Últimas movimentações\n\n"
+    texto = "📄 Extrato\n\n"
 
-    for tipo,valor,desc,data in dados:
+    for tipo, valor, desc, data in dados:
 
-        emoji = "💰" if tipo=="receita" else "💸"
+        emoji = "💰" if tipo == "receita" else "💸"
 
-        texto += f"{emoji} {desc}\nR${valor}\n📅 {data}\n\n"
+        texto += f"{emoji} R${valor} - {desc}\n📅 {data}\n\n"
 
     await update.message.reply_text(texto)
 
@@ -223,72 +280,98 @@ async def extrato(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ADMIN
 # =========================
 
-async def adduser(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if update.message.from_user.id != ADMIN_ID:
         return
 
-    user_id = int(context.args[0])
-    dias = int(context.args[1])
+    await update.message.reply_text(
+        """
+👑 Painel Admin
 
-    expira = datetime.now() + timedelta(days=dias)
-
-    cursor.execute("""
-    INSERT OR REPLACE INTO users(user_id,expira)
-    VALUES(?,?)
-    """,(user_id,expira.strftime("%Y-%m-%d")))
-
-    conn.commit()
-
-    await update.message.reply_text("✅ Usuário liberado.")
-
-async def deluser(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
-    if update.message.from_user.id != ADMIN_ID:
-        return
-
-    user_id = int(context.args[0])
-
-    cursor.execute("DELETE FROM users WHERE user_id=?",(user_id,))
-    conn.commit()
-
-    await update.message.reply_text("❌ Usuário removido.")
-
-async def users(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
-    if update.message.from_user.id != ADMIN_ID:
-        return
-
-    cursor.execute("SELECT * FROM users")
-
-    dados = cursor.fetchall()
-
-    texto = "👥 Usuários\n\n"
-
-    for user,expira in dados:
-        texto += f"{user} - {expira}\n"
-
-    await update.message.reply_text(texto)
+/usuarios
+/liberar ID
+/bloquear ID
+"""
+    )
 
 # =========================
-# BOT
+# USUARIOS
+# =========================
+
+async def usuarios(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    if update.message.from_user.id != ADMIN_ID:
+        return
+
+    cursor.execute("SELECT COUNT(*) FROM usuarios")
+
+    total = cursor.fetchone()[0]
+
+    await update.message.reply_text(f"👥 Total usuários: {total}")
+
+# =========================
+# LIBERAR
+# =========================
+
+async def liberar(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    if update.message.from_user.id != ADMIN_ID:
+        return
+
+    user = int(context.args[0])
+
+    cursor.execute(
+        "UPDATE usuarios SET ativo=1 WHERE user_id=?",
+        (user,)
+    )
+
+    conn.commit()
+
+    await update.message.reply_text("✅ Usuário liberado")
+
+# =========================
+# BLOQUEAR
+# =========================
+
+async def bloquear(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    if update.message.from_user.id != ADMIN_ID:
+        return
+
+    user = int(context.args[0])
+
+    cursor.execute(
+        "UPDATE usuarios SET ativo=0 WHERE user_id=?",
+        (user,)
+    )
+
+    conn.commit()
+
+    await update.message.reply_text("❌ Usuário bloqueado")
+
+# =========================
+# MAIN
 # =========================
 
 app = ApplicationBuilder().token(TOKEN).build()
 
 app.add_handler(CommandHandler("start", start))
 app.add_handler(CommandHandler("ajuda", ajuda))
+app.add_handler(CommandHandler("id", id))
 app.add_handler(CommandHandler("plano", plano))
+app.add_handler(CommandHandler("pagar", pagar))
 
-app.add_handler(CommandHandler("receita", receita))
 app.add_handler(CommandHandler("gasto", gasto))
+app.add_handler(CommandHandler("receita", receita))
 app.add_handler(CommandHandler("saldo", saldo))
 app.add_handler(CommandHandler("extrato", extrato))
 
-app.add_handler(CommandHandler("adduser", adduser))
-app.add_handler(CommandHandler("deluser", deluser))
-app.add_handler(CommandHandler("users", users))
+app.add_handler(CommandHandler("admin", admin))
+app.add_handler(CommandHandler("usuarios", usuarios))
+app.add_handler(CommandHandler("liberar", liberar))
+app.add_handler(CommandHandler("bloquear", bloquear))
 
-print("BOT RODANDO...")
+print("Bot rodando...")
 
 app.run_polling()
