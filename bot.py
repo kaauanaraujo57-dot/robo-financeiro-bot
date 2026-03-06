@@ -1,176 +1,294 @@
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
 TOKEN = "SEU_TOKEN_AQUI"
+ADMIN_ID = 123456789  # seu id do telegram
 
 # =========================
 # BANCO DE DADOS
 # =========================
 
-conn = sqlite3.connect("financeiro.db", check_same_thread=False)
+conn = sqlite3.connect("finance.db", check_same_thread=False)
 cursor = conn.cursor()
 
 cursor.execute("""
-CREATE TABLE IF NOT EXISTS transacoes (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER,
-    tipo TEXT,
-    valor REAL,
-    descricao TEXT,
-    data TEXT
+CREATE TABLE IF NOT EXISTS users(
+user_id INTEGER PRIMARY KEY,
+expira TEXT
+)
+""")
+
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS transacoes(
+id INTEGER PRIMARY KEY AUTOINCREMENT,
+user_id INTEGER,
+tipo TEXT,
+valor REAL,
+descricao TEXT,
+data TEXT
 )
 """)
 
 conn.commit()
 
 # =========================
-# COMANDOS
+# FUNÇÃO VERIFICAR PLANO
+# =========================
+
+def plano_ativo(user_id):
+
+    cursor.execute("SELECT expira FROM users WHERE user_id=?", (user_id,))
+    result = cursor.fetchone()
+
+    if not result:
+        return False
+
+    data_expira = datetime.strptime(result[0], "%Y-%m-%d")
+
+    if datetime.now() > data_expira:
+        return False
+
+    return True
+
+# =========================
+# START
 # =========================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
     await update.message.reply_text(
-        "💰 Bot Financeiro iniciado!\n\nDigite /ajuda para ver os comandos."
+        "🤖 Bem vindo ao Bot Financeiro\n\n"
+        "Use /ajuda para ver os comandos."
     )
 
-# -------------------------
+# =========================
+# AJUDA
+# =========================
 
 async def ajuda(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
     texto = """
-📊 COMANDOS DO BOT
+📊 Comandos disponíveis
 
-/receita valor descricao
-Ex:
-/receita 1500 salario
-
-/gasto valor descricao
-Ex:
-/gasto 200 mercado
+/receita valor descrição
+/gasto valor descrição
 
 /extrato
-Mostra todas transações
-
 /saldo
-Mostra saldo atual
 
-/reset
-Apaga todos registros
+/plano
 """
+
     await update.message.reply_text(texto)
 
-# -------------------------
+# =========================
+# PLANO
+# =========================
+
+async def plano(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    user = update.message.from_user.id
+
+    cursor.execute("SELECT expira FROM users WHERE user_id=?", (user,))
+    result = cursor.fetchone()
+
+    if not result:
+        await update.message.reply_text("❌ Você não possui plano ativo.")
+        return
+
+    await update.message.reply_text(f"📦 Seu plano expira em {result[0]}")
+
+# =========================
+# RECEITA
+# =========================
 
 async def receita(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        valor = float(context.args[0])
-        descricao = " ".join(context.args[1:])
-    except:
-        await update.message.reply_text("Use: /receita valor descricao")
+
+    user = update.message.from_user.id
+
+    if not plano_ativo(user):
+        await update.message.reply_text("⚠️ Seu plano expirou.")
         return
 
-    data = datetime.now().strftime("%d/%m/%Y %H:%M")
+    try:
 
-    cursor.execute(
-        "INSERT INTO transacoes (user_id, tipo, valor, descricao, data) VALUES (?, ?, ?, ?, ?)",
-        (update.effective_user.id, "receita", valor, descricao, data)
-    )
-    conn.commit()
+        valor = float(context.args[0])
+        descricao = " ".join(context.args[1:])
 
-    await update.message.reply_text(f"✅ Receita registrada\n💰 {valor} - {descricao}")
+        data = datetime.now().strftime("%d/%m/%Y %H:%M")
 
-# -------------------------
+        cursor.execute("""
+        INSERT INTO transacoes(user_id,tipo,valor,descricao,data)
+        VALUES(?,?,?,?,?)
+        """,(user,"receita",valor,descricao,data))
+
+        conn.commit()
+
+        await update.message.reply_text("✅ Receita adicionada!")
+
+    except:
+        await update.message.reply_text("Use:\n/receita 100 salario")
+
+# =========================
+# GASTO
+# =========================
 
 async def gasto(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    user = update.message.from_user.id
+
+    if not plano_ativo(user):
+        await update.message.reply_text("⚠️ Seu plano expirou.")
+        return
+
     try:
+
         valor = float(context.args[0])
         descricao = " ".join(context.args[1:])
+
+        data = datetime.now().strftime("%d/%m/%Y %H:%M")
+
+        cursor.execute("""
+        INSERT INTO transacoes(user_id,tipo,valor,descricao,data)
+        VALUES(?,?,?,?,?)
+        """,(user,"gasto",valor,descricao,data))
+
+        conn.commit()
+
+        await update.message.reply_text("✅ Gasto registrado!")
+
     except:
-        await update.message.reply_text("Use: /gasto valor descricao")
-        return
+        await update.message.reply_text("Use:\n/gasto 50 mercado")
 
-    data = datetime.now().strftime("%d/%m/%Y %H:%M")
-
-    cursor.execute(
-        "INSERT INTO transacoes (user_id, tipo, valor, descricao, data) VALUES (?, ?, ?, ?, ?)",
-        (update.effective_user.id, "gasto", valor, descricao, data)
-    )
-    conn.commit()
-
-    await update.message.reply_text(f"💸 Gasto registrado\n{valor} - {descricao}")
-
-# -------------------------
-
-async def extrato(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
-    cursor.execute(
-        "SELECT tipo, valor, descricao, data FROM transacoes WHERE user_id=? ORDER BY id DESC LIMIT 20",
-        (update.effective_user.id,)
-    )
-
-    dados = cursor.fetchall()
-
-    if not dados:
-        await update.message.reply_text("Nenhuma transação registrada.")
-        return
-
-    texto = "📊 Últimas transações\n\n"
-
-    for tipo, valor, desc, data in dados:
-
-        emoji = "💰" if tipo == "receita" else "💸"
-
-        texto += f"{emoji} {valor} | {desc}\n📅 {data}\n\n"
-
-    await update.message.reply_text(texto)
-
-# -------------------------
+# =========================
+# SALDO
+# =========================
 
 async def saldo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
-    cursor.execute(
-        "SELECT tipo, valor FROM transacoes WHERE user_id=?",
-        (update.effective_user.id,)
-    )
+    user = update.message.from_user.id
+
+    cursor.execute("""
+    SELECT tipo,valor FROM transacoes WHERE user_id=?
+    """,(user,))
 
     dados = cursor.fetchall()
 
     saldo = 0
 
-    for tipo, valor in dados:
+    for tipo,valor in dados:
+
         if tipo == "receita":
             saldo += valor
         else:
             saldo -= valor
 
-    await update.message.reply_text(f"💰 Saldo atual: {saldo}")
-
-# -------------------------
-
-async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
-    cursor.execute(
-        "DELETE FROM transacoes WHERE user_id=?",
-        (update.effective_user.id,)
-    )
-    conn.commit()
-
-    await update.message.reply_text("🗑 Todos os registros foram apagados.")
+    await update.message.reply_text(f"💰 Saldo atual: R${saldo:.2f}")
 
 # =========================
-# INICIAR BOT
+# EXTRATO
+# =========================
+
+async def extrato(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    user = update.message.from_user.id
+
+    cursor.execute("""
+    SELECT tipo,valor,descricao,data
+    FROM transacoes
+    WHERE user_id=?
+    ORDER BY id DESC
+    LIMIT 10
+    """,(user,))
+
+    dados = cursor.fetchall()
+
+    if not dados:
+        await update.message.reply_text("Sem movimentações.")
+        return
+
+    texto = "📊 Últimas movimentações\n\n"
+
+    for tipo,valor,desc,data in dados:
+
+        emoji = "💰" if tipo=="receita" else "💸"
+
+        texto += f"{emoji} {desc}\nR${valor}\n📅 {data}\n\n"
+
+    await update.message.reply_text(texto)
+
+# =========================
+# ADMIN
+# =========================
+
+async def adduser(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    if update.message.from_user.id != ADMIN_ID:
+        return
+
+    user_id = int(context.args[0])
+    dias = int(context.args[1])
+
+    expira = datetime.now() + timedelta(days=dias)
+
+    cursor.execute("""
+    INSERT OR REPLACE INTO users(user_id,expira)
+    VALUES(?,?)
+    """,(user_id,expira.strftime("%Y-%m-%d")))
+
+    conn.commit()
+
+    await update.message.reply_text("✅ Usuário liberado.")
+
+async def deluser(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    if update.message.from_user.id != ADMIN_ID:
+        return
+
+    user_id = int(context.args[0])
+
+    cursor.execute("DELETE FROM users WHERE user_id=?",(user_id,))
+    conn.commit()
+
+    await update.message.reply_text("❌ Usuário removido.")
+
+async def users(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    if update.message.from_user.id != ADMIN_ID:
+        return
+
+    cursor.execute("SELECT * FROM users")
+
+    dados = cursor.fetchall()
+
+    texto = "👥 Usuários\n\n"
+
+    for user,expira in dados:
+        texto += f"{user} - {expira}\n"
+
+    await update.message.reply_text(texto)
+
+# =========================
+# BOT
 # =========================
 
 app = ApplicationBuilder().token(TOKEN).build()
 
 app.add_handler(CommandHandler("start", start))
 app.add_handler(CommandHandler("ajuda", ajuda))
+app.add_handler(CommandHandler("plano", plano))
+
 app.add_handler(CommandHandler("receita", receita))
 app.add_handler(CommandHandler("gasto", gasto))
-app.add_handler(CommandHandler("extrato", extrato))
 app.add_handler(CommandHandler("saldo", saldo))
-app.add_handler(CommandHandler("reset", reset))
+app.add_handler(CommandHandler("extrato", extrato))
 
-print("BOT ONLINE...")
+app.add_handler(CommandHandler("adduser", adduser))
+app.add_handler(CommandHandler("deluser", deluser))
+app.add_handler(CommandHandler("users", users))
+
+print("BOT RODANDO...")
 
 app.run_polling()
