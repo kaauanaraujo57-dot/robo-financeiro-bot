@@ -1,6 +1,5 @@
 import os
 import logging
-import pandas as pd
 from datetime import datetime
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
