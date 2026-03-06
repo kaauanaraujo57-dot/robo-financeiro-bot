@@ -1,6 +1,6 @@
 import os
 import psycopg2
-from datetime import datetime
+from datetime import datetime, timedelta
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
@@ -10,217 +10,281 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 conn = psycopg2.connect(DATABASE_URL)
 cursor = conn.cursor()
 
+# =========================
+# CRIAR TABELAS
+# =========================
+
 cursor.execute("""
-CREATE TABLE IF NOT EXISTS financeiro (
-    id SERIAL PRIMARY KEY,
-    user_id BIGINT,
-    data DATE,
-    tipo TEXT,
-    valor FLOAT,
-    categoria TEXT
+CREATE TABLE IF NOT EXISTS usuarios (
+user_id BIGINT PRIMARY KEY,
+trial_ate TIMESTAMP,
+premium BOOLEAN DEFAULT FALSE
+)
+""")
+
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS transacoes (
+id SERIAL PRIMARY KEY,
+user_id BIGINT,
+tipo TEXT,
+valor FLOAT,
+categoria TEXT,
+data TIMESTAMP
 )
 """)
 
 conn.commit()
 
-
+# =========================
 # START
+# =========================
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
-    await update.message.reply_text(
-        """
-💰 BOT FINANCEIRO
+    user_id = update.effective_user.id
 
-Comandos:
+    cursor.execute("SELECT * FROM usuarios WHERE user_id=%s",(user_id,))
+    user = cursor.fetchone()
 
-/receita valor categoria
-/gasto valor categoria
-/saldo
-/mes
-/categorias
-/extrato
-/reset
-/ajuda
-"""
-    )
+    if not user:
 
-
-# RECEITA
-async def receita(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
-    try:
-
-        user = update.effective_user.id
-        valor = float(context.args[0])
-        categoria = " ".join(context.args[1:])
-        data = datetime.now().date()
+        trial = datetime.now() + timedelta(days=7)
 
         cursor.execute(
-            "INSERT INTO financeiro (user_id,data,tipo,valor,categoria) VALUES (%s,%s,%s,%s,%s)",
-            (user, data, "receita", valor, categoria)
+            "INSERT INTO usuarios (user_id, trial_ate) VALUES (%s,%s)",
+            (user_id, trial)
         )
 
         conn.commit()
 
-        await update.message.reply_text(f"💰 Receita registrada: R$ {valor} - {categoria}")
-
-    except:
-        await update.message.reply_text("Use: /receita 2000 salario")
-
-
-# GASTO
-async def gasto(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
-    try:
-
-        user = update.effective_user.id
-        valor = float(context.args[0])
-        categoria = " ".join(context.args[1:])
-        data = datetime.now().date()
-
-        cursor.execute(
-            "INSERT INTO financeiro (user_id,data,tipo,valor,categoria) VALUES (%s,%s,%s,%s,%s)",
-            (user, data, "gasto", valor, categoria)
+        await update.message.reply_text(
+            "🎉 Bem vindo ao FinanceBot\n\n"
+            "Você ganhou 7 dias grátis.\n\n"
+            "Use:\n"
+            "/gasto valor categoria\n"
+            "/receita valor categoria\n"
+            "/saldo"
         )
 
-        conn.commit()
+    else:
+        await update.message.reply_text("Você já está cadastrado.")
 
-        await update.message.reply_text(f"💸 Gasto registrado: R$ {valor} - {categoria}")
+# =========================
+# VERIFICAR ACESSO
+# =========================
 
-    except:
-        await update.message.reply_text("Use: /gasto 50 mercado")
-
-
-# SALDO
-async def saldo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
-    user = update.effective_user.id
-
-    cursor.execute("SELECT SUM(valor) FROM financeiro WHERE user_id=%s AND tipo='receita'", (user,))
-    receitas = cursor.fetchone()[0] or 0
-
-    cursor.execute("SELECT SUM(valor) FROM financeiro WHERE user_id=%s AND tipo='gasto'", (user,))
-    gastos = cursor.fetchone()[0] or 0
-
-    saldo = receitas - gastos
-
-    await update.message.reply_text(
-        f"""
-📊 Resumo
-
-Receitas: R$ {receitas}
-Gastos: R$ {gastos}
-
-Saldo: R$ {saldo}
-"""
-    )
-
-
-# EXTRATO
-async def extrato(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
-    user = update.effective_user.id
+def acesso(user_id):
 
     cursor.execute(
-        "SELECT data,tipo,valor,categoria FROM financeiro WHERE user_id=%s ORDER BY id DESC LIMIT 10",
-        (user,)
+        "SELECT trial_ate,premium FROM usuarios WHERE user_id=%s",
+        (user_id,)
+    )
+
+    user = cursor.fetchone()
+
+    if user[1]:
+        return True
+
+    if datetime.now() <= user[0]:
+        return True
+
+    return False
+
+# =========================
+# GASTO
+# =========================
+
+async def gasto(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    user_id = update.effective_user.id
+
+    if not acesso(user_id):
+
+        await update.message.reply_text(
+            "⚠️ Seu período gratuito terminou.\nUse /premium"
+        )
+
+        return
+
+    try:
+
+        valor = float(context.args[0])
+        categoria = " ".join(context.args[1:])
+
+        cursor.execute(
+            """
+            INSERT INTO transacoes
+            (user_id,tipo,valor,categoria,data)
+            VALUES (%s,%s,%s,%s,%s)
+            """,
+            (user_id,"gasto",valor,categoria,datetime.now())
+        )
+
+        conn.commit()
+
+        await update.message.reply_text(
+            f"💸 Gasto registrado\nR$ {valor} - {categoria}"
+        )
+
+    except:
+        await update.message.reply_text(
+            "Use:\n/gasto 50 mercado"
+        )
+
+# =========================
+# RECEITA
+# =========================
+
+async def receita(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    user_id = update.effective_user.id
+
+    if not acesso(user_id):
+
+        await update.message.reply_text(
+            "⚠️ Seu período gratuito terminou.\nUse /premium"
+        )
+
+        return
+
+    try:
+
+        valor = float(context.args[0])
+        categoria = " ".join(context.args[1:])
+
+        cursor.execute(
+            """
+            INSERT INTO transacoes
+            (user_id,tipo,valor,categoria,data)
+            VALUES (%s,%s,%s,%s,%s)
+            """,
+            (user_id,"receita",valor,categoria,datetime.now())
+        )
+
+        conn.commit()
+
+        await update.message.reply_text(
+            f"💰 Receita registrada\nR$ {valor} - {categoria}"
+        )
+
+    except:
+
+        await update.message.reply_text(
+            "Use:\n/receita 200 salario"
+        )
+
+# =========================
+# SALDO
+# =========================
+
+async def saldo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    user_id = update.effective_user.id
+
+    cursor.execute(
+        """
+        SELECT tipo,valor FROM transacoes
+        WHERE user_id=%s
+        """,
+        (user_id,)
     )
 
     dados = cursor.fetchall()
 
-    if not dados:
-        await update.message.reply_text("Sem registros.")
-        return
+    saldo = 0
 
-    texto = "🧾 Últimos registros\n\n"
+    for tipo,valor in dados:
 
-    for d in dados:
-        texto += f"{d[0]} | {d[1]} | R$ {d[2]} | {d[3]}\n"
+        if tipo == "receita":
+            saldo += valor
+        else:
+            saldo -= valor
 
-    await update.message.reply_text(texto)
+    await update.message.reply_text(
+        f"💰 Seu saldo atual:\nR$ {saldo:.2f}"
+    )
 
+# =========================
+# RELATORIO MES
+# =========================
 
-# CATEGORIAS
-async def categorias(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def mes(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
-    user = update.effective_user.id
+    user_id = update.effective_user.id
 
-    cursor.execute("""
-    SELECT categoria, SUM(valor)
-    FROM financeiro
-    WHERE user_id=%s AND tipo='gasto'
-    GROUP BY categoria
-    ORDER BY SUM(valor) DESC
-    """, (user,))
+    inicio_mes = datetime.now().replace(day=1)
+
+    cursor.execute(
+        """
+        SELECT tipo,valor,categoria
+        FROM transacoes
+        WHERE user_id=%s AND data >= %s
+        """,
+        (user_id,inicio_mes)
+    )
 
     dados = cursor.fetchall()
 
-    texto = "📊 Gastos por categoria\n\n"
+    texto = "📊 Relatório do mês\n\n"
 
-    for c in dados:
-        texto += f"{c[0]}: R$ {c[1]}\n"
+    total = 0
+
+    for tipo,valor,cat in dados:
+
+        if tipo == "receita":
+            texto += f"💰 +{valor} {cat}\n"
+            total += valor
+        else:
+            texto += f"💸 -{valor} {cat}\n"
+            total -= valor
+
+    texto += f"\nSaldo: R$ {total:.2f}"
 
     await update.message.reply_text(texto)
 
-
-# MES
-async def mes(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
-    user = update.effective_user.id
-    mes = datetime.now().month
-
-    cursor.execute("""
-    SELECT SUM(valor)
-    FROM financeiro
-    WHERE user_id=%s AND tipo='gasto'
-    AND EXTRACT(MONTH FROM data)=%s
-    """, (user, mes))
-
-    total = cursor.fetchone()[0] or 0
-
-    await update.message.reply_text(f"📅 Total gasto no mês: R$ {total}")
-
-
+# =========================
 # RESET
+# =========================
+
 async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
-    user = update.effective_user.id
+    user_id = update.effective_user.id
 
-    cursor.execute("DELETE FROM financeiro WHERE user_id=%s", (user,))
+    cursor.execute(
+        "DELETE FROM transacoes WHERE user_id=%s",
+        (user_id,)
+    )
+
     conn.commit()
 
-    await update.message.reply_text("Dados apagados.")
+    await update.message.reply_text("🔄 Dados resetados.")
 
+# =========================
+# PREMIUM
+# =========================
 
-# AJUDA
-async def ajuda(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def premium(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(
-"""
-📖 Como usar
+        "💎 Plano Premium\n\n"
+        "R$ 9,90 / mês\n\n"
+        "Em breve pagamento automático."
+    )
 
-/gasto 50 mercado
-/receita 2000 salario
-
-/saldo
-/extrato
-/categorias
-"""
-)
-
+# =========================
+# MAIN
+# =========================
 
 app = ApplicationBuilder().token(TOKEN).build()
 
 app.add_handler(CommandHandler("start", start))
-app.add_handler(CommandHandler("receita", receita))
 app.add_handler(CommandHandler("gasto", gasto))
+app.add_handler(CommandHandler("receita", receita))
 app.add_handler(CommandHandler("saldo", saldo))
-app.add_handler(CommandHandler("extrato", extrato))
-app.add_handler(CommandHandler("categorias", categorias))
 app.add_handler(CommandHandler("mes", mes))
 app.add_handler(CommandHandler("reset", reset))
-app.add_handler(CommandHandler("ajuda", ajuda))
+app.add_handler(CommandHandler("premium", premium))
 
-print("Bot rodando...")
+print("BOT ONLINE")
 
 app.run_polling()
